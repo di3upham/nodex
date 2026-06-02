@@ -323,6 +323,47 @@ func (bm *BieuMau) genTree(node *Node, idbms []int) {
 		bm.recursiveNode(chiTieuNode, remainIdbmm[idbm])
 		chitieuNodem[idbm] = chiTieuNode
 	}
+
+	if len(phanToChungIdbms) == 0 {
+		return
+	}
+
+	var leafNodes []*Node
+	nodearr := []*Node{node}
+	for len(nodearr) > 0 {
+		nextNodearr := make([]*Node, 0)
+		for _, n := range nodearr {
+			if len(n.Children) == 0 {
+				leafNodes = append(leafNodes, n)
+			}
+
+			nextNodearr = append(nextNodearr, n.Children...)
+		}
+		nodearr = nextNodearr
+	}
+
+	for _, lNode := range leafNodes {
+		for _, idbm := range chiTieuIdbms {
+			if n, has := chitieuNodem[idbm]; has {
+				lNode.Children = append(lNode.Children, copyNode(n))
+			}
+		}
+	}
+}
+
+// TODO don't use recursive
+func copyNode(node *Node) *Node {
+	clone := &Node{
+		IDbms:    make([]int, len(node.IDbms)),
+		Value:    node.Value,
+		Type:     node.Type,
+		Children: make([]*Node, len(node.Children)),
+	}
+	copy(clone.IDbms, node.IDbms)
+	for i := range clone.Children {
+		clone.Children[i] = copyNode(node.Children[i])
+	}
+	return clone
 }
 
 // only phan to, phan to value
@@ -421,6 +462,16 @@ func (bm *BieuMau) genContent() {
 
 		// TODO add cell to bm.Content
 	}
+}
+
+func (bm *BieuMau) replaceContent(matrix [][]string) {
+	for i, row := range matrix {
+		for j, value := range row {
+			bm.Content[CellIndex{Ri: i, Ci: j}].Value = value
+		}
+	}
+
+	// TODO update column tree and row tree
 }
 
 func (bm *BieuMau) setupFullFlattable() {
