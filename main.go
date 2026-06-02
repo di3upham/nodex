@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"slices"
 )
 
@@ -81,21 +82,7 @@ type Cell struct {
 
 // require call if change ChiTieus, PhanTos, PhanToChungs, reinitID()
 func (bm *BieuMau) derived() {
-	bm.chiTieum = make(map[int]*ChiTieu)
-	bm.phanTom = make(map[int]*PhanTo)
-
-	for _, chiTieu := range bm.ChiTieus {
-		bm.chiTieum[chiTieu.IDbm] = chiTieu
-		for _, phanTo := range chiTieu.PhanTos {
-			bm.phanTom[phanTo.IDbm] = phanTo
-		}
-	}
-
-	for _, phanTo := range bm.PhanToChungs {
-		bm.phanTom[phanTo.IDbm] = phanTo
-	}
-
-	// reinit ID
+	// 1. Find maxID
 	var maxID int
 	for _, chiTieu := range bm.ChiTieus {
 		if chiTieu.IDbm > maxID {
@@ -107,7 +94,13 @@ func (bm *BieuMau) derived() {
 			}
 		}
 	}
+	for _, phanTo := range bm.PhanToChungs {
+		if phanTo.IDbm > maxID {
+			maxID = phanTo.IDbm
+		}
+	}
 
+	// 2. Assign IDs if they are 0
 	for _, chiTieu := range bm.ChiTieus {
 		if chiTieu.IDbm == 0 {
 			maxID++
@@ -122,16 +115,31 @@ func (bm *BieuMau) derived() {
 		}
 	}
 
-	// TODO merge or join?, current use merge
 	for _, phanTo := range bm.PhanToChungs {
-		maxID++
-		phanTo.IDbm = maxID
-
+		if phanTo.IDbm == 0 {
+			maxID++
+			phanTo.IDbm = maxID
+		}
 		phanTo.Values = []string{}
 		for _, child := range phanTo.Children {
 			phanTo.Values = append(phanTo.Values, child.Values...)
 		}
 		phanTo.Values = uniqArrs(phanTo.Values)
+	}
+
+	// 3. Populate maps
+	bm.chiTieum = make(map[int]*ChiTieu)
+	bm.phanTom = make(map[int]*PhanTo)
+
+	for _, chiTieu := range bm.ChiTieus {
+		bm.chiTieum[chiTieu.IDbm] = chiTieu
+		for _, phanTo := range chiTieu.PhanTos {
+			bm.phanTom[phanTo.IDbm] = phanTo
+		}
+	}
+
+	for _, phanTo := range bm.PhanToChungs {
+		bm.phanTom[phanTo.IDbm] = phanTo
 	}
 }
 
@@ -371,107 +379,529 @@ func (bm *BieuMau) recursiveNode(node *Node, idbms []int) {
 	if len(idbms) == 0 {
 		return
 	}
-	for _, idbm := range idbms {
-		phanTo, has := bm.phanTom[idbm]
-		if !has {
-			continue // ignore error
-		}
-
-		phanToNode := &Node{
-			IDbms: []int{idbm},
-			Type:  "phanto",
-		}
-
-		for _, value := range phanTo.Values {
-			valueNode := &Node{
-				Value: value,
-				IDbms: []int{idbm},
-				Type:  "phanto_value",
-			}
-			bm.recursiveNode(valueNode, idbms[1:])
-			phanToNode.Children = append(phanToNode.Children, valueNode)
-		}
-
-		node.Children = append(node.Children, phanToNode)
+	idbm := idbms[0]
+	phanTo, has := bm.phanTom[idbm]
+	if !has {
+		bm.recursiveNode(node, idbms[1:])
+		return
 	}
+
+	phanToNode := &Node{
+		IDbms: []int{idbm},
+		Type:  "phanto",
+	}
+
+	for _, value := range phanTo.Values {
+		valueNode := &Node{
+			Value: value,
+			IDbms: []int{idbm},
+			Type:  "phanto_value",
+		}
+		bm.recursiveNode(valueNode, idbms[1:])
+		phanToNode.Children = append(phanToNode.Children, valueNode)
+	}
+
+	node.Children = append(node.Children, phanToNode)
+}
+
+type PathNode struct {
+	Type  string
+	IDbm  int
+	Value string
+}
+
+func getDepth(node *Node) int {
+	if node == nil {
+		return 0
+	}
+	if len(node.Children) == 0 {
+		if node.Type == "" {
+			return 0
+		}
+		return 1
+	}
+	maxChildDepth := 0
+	for _, child := range node.Children {
+		d := getDepth(child)
+		if d > maxChildDepth {
+			maxChildDepth = d
+		}
+	}
+	if node.Type == "" {
+		return maxChildDepth
+	}
+	return 1 + maxChildDepth
+}
+
+func layoutColTree(node *Node, rowOffset int, colOffset *int) {
+	if node == nil {
+		return
+	}
+	if len(node.Children) == 0 {
+		node.Ri = rowOffset
+		node.Ci = *colOffset
+		*colOffset++
+		return
+	}
+
+	startCol := *colOffset
+	for _, child := range node.Children {
+		layoutColTree(child, rowOffset+1, colOffset)
+	}
+	node.Ri = rowOffset
+	node.Ci = startCol
+}
+
+func layoutRowTree(node *Node, colOffset int, rowOffset *int) {
+	if node == nil {
+		return
+	}
+	if len(node.Children) == 0 {
+		node.Ci = colOffset
+		node.Ri = *rowOffset
+		*rowOffset++
+		return
+	}
+
+	startRow := *rowOffset
+	for _, child := range node.Children {
+		layoutRowTree(child, colOffset+1, rowOffset)
+	}
+	node.Ci = colOffset
+	node.Ri = startRow
+}
+
+func getLeaves(node *Node) []*Node {
+	if node == nil {
+		return nil
+	}
+	if len(node.Children) == 0 {
+		if node.Type == "" {
+			return nil
+		}
+		return []*Node{node}
+	}
+	var leaves []*Node
+	for _, child := range node.Children {
+		leaves = append(leaves, getLeaves(child)...)
+	}
+	return leaves
+}
+
+func collectLeafPaths(node *Node, currentPath []PathNode, paths *map[*Node][]PathNode) {
+	if node == nil {
+		return
+	}
+	newPath := currentPath
+	if node.Type != "" {
+		idbm := 0
+		if len(node.IDbms) > 0 {
+			idbm = node.IDbms[0]
+		}
+		newPath = append(currentPath, PathNode{
+			Type:  node.Type,
+			IDbm:  idbm,
+			Value: node.Value,
+		})
+	}
+
+	if len(node.Children) == 0 {
+		if node.Type != "" {
+			(*paths)[node] = newPath
+		}
+		return
+	}
+
+	for _, child := range node.Children {
+		collectLeafPaths(child, newPath, paths)
+	}
+}
+
+func matchDims(dims1, dims2 []*KV) bool {
+	if len(dims1) != len(dims2) {
+		return false
+	}
+	for _, kv1 := range dims1 {
+		found := false
+		for _, kv2 := range dims2 {
+			if kv1.Key == kv2.Key && kv1.Value == kv2.Value {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+func findSoLieu(bm *BieuMau, chiTieuName string, dims []*KV) string {
+	var targetBang *BangChiTieu
+	for _, bct := range bm.BangChiTieus {
+		if bct.ChiTieuName == chiTieuName {
+			targetBang = bct
+			break
+		}
+	}
+	if targetBang == nil {
+		return ""
+	}
+
+	for _, ddl := range targetBang.DongDuLieus {
+		if matchDims(ddl.Dims, dims) {
+			return ddl.Solieu
+		}
+	}
+	return ""
 }
 
 func (bm *BieuMau) genContent() {
 	bm.Content = make(map[CellIndex]*Cell)
 
-	stack := []*Node{bm.ColTree}
+	headerRows := getDepth(bm.ColTree)
+	headerCols := getDepth(bm.RowTree)
 
-	for len(stack) > 0 {
-		n := len(stack) - 1
-		current := stack[n]
-		stack = stack[:n]
+	colOffset := headerCols
+	layoutColTree(bm.ColTree, -1, &colOffset)
 
-		arr := make([]*Node, len(current.Children))
-		copy(arr, current.Children)
-		slices.Reverse(arr)
-		stack = append(stack, arr...)
+	rowOffset := headerRows
+	layoutRowTree(bm.RowTree, -1, &rowOffset)
 
-		cell := &Cell{}
-		switch current.Type {
-		case "chitieu":
-			ct := bm.chiTieum[current.IDbms[0]]
-			cell.Value = ct.Name
-			cell.Node = current
-		case "phanto":
-			pt := bm.phanTom[current.IDbms[0]]
-			cell.Value = pt.Name
-			cell.Node = current
-		case "phanto_value":
-			cell.Value = current.Value
-			cell.Node = current
-		default:
-			continue
+	var traverse func(n *Node)
+	traverse = func(n *Node) {
+		if n == nil {
+			return
 		}
+		if n.Type != "" {
+			var val string
+			switch n.Type {
+			case "chitieu":
+				if ct, ok := bm.chiTieum[n.IDbms[0]]; ok {
+					val = ct.Name
+				}
+			case "phanto":
+				if pt, ok := bm.phanTom[n.IDbms[0]]; ok {
+					val = pt.Name
+				}
+			case "phanto_value":
+				val = n.Value
+			}
+			cell := &Cell{
+				Value: val,
+				Ci:    n.Ci,
+				Ri:    n.Ri,
+				Node:  n,
+			}
+			bm.Content[CellIndex{Ri: n.Ri, Ci: n.Ci}] = cell
+		}
+		for _, child := range n.Children {
+			traverse(child)
+		}
+	}
+	traverse(bm.ColTree)
+	traverse(bm.RowTree)
 
-		// TODO add cell to bm.Content
+	colLeaves := getLeaves(bm.ColTree)
+	rowLeaves := getLeaves(bm.RowTree)
+
+	colPaths := make(map[*Node][]PathNode)
+	collectLeafPaths(bm.ColTree, nil, &colPaths)
+
+	rowPaths := make(map[*Node][]PathNode)
+	collectLeafPaths(bm.RowTree, nil, &rowPaths)
+
+	numCols := len(colLeaves)
+	if numCols == 0 {
+		numCols = 1
+	}
+	numRows := len(rowLeaves)
+	if numRows == 0 {
+		numRows = 1
 	}
 
-	stack = []*Node{bm.RowTree}
-
-	for len(stack) > 0 {
-		n := len(stack) - 1
-		current := stack[n]
-		stack = stack[:n]
-
-		arr := make([]*Node, len(current.Children))
-		copy(arr, current.Children)
-		slices.Reverse(arr)
-		stack = append(stack, arr...)
-
-		cell := &Cell{}
-		switch current.Type {
-		case "chitieu":
-			ct := bm.chiTieum[current.IDbms[0]]
-			cell.Value = ct.Name
-			cell.Node = current
-		case "phanto":
-			pt := bm.phanTom[current.IDbms[0]]
-			cell.Value = pt.Name
-			cell.Node = current
-		case "phanto_value":
-			cell.Value = current.Value
-			cell.Node = current
-		default:
-			continue
+	for r := 0; r < numRows; r++ {
+		var rLeaf *Node
+		var rPath []PathNode
+		if r < len(rowLeaves) {
+			rLeaf = rowLeaves[r]
+			rPath = rowPaths[rLeaf]
+		}
+		ri := headerRows + r
+		if rLeaf != nil {
+			ri = rLeaf.Ri
 		}
 
-		// TODO add cell to bm.Content
+		for c := 0; c < numCols; c++ {
+			var cLeaf *Node
+			var cPath []PathNode
+			if c < len(colLeaves) {
+				cLeaf = colLeaves[c]
+				cPath = colPaths[cLeaf]
+			}
+			ci := headerCols + c
+			if cLeaf != nil {
+				ci = cLeaf.Ci
+			}
+
+			var chiTieuName string
+			var dims []*KV
+
+			for _, p := range rPath {
+				if p.Type == "chitieu" {
+					chiTieuName = p.Value
+				} else if p.Type == "phanto_value" {
+					if pt, ok := bm.phanTom[p.IDbm]; ok {
+						dims = append(dims, &KV{Key: pt.Name, Value: p.Value})
+					}
+				}
+			}
+			for _, p := range cPath {
+				if p.Type == "chitieu" {
+					chiTieuName = p.Value
+				} else if p.Type == "phanto_value" {
+					if pt, ok := bm.phanTom[p.IDbm]; ok {
+						dims = append(dims, &KV{Key: pt.Name, Value: p.Value})
+					}
+				}
+			}
+
+			solieu := findSoLieu(bm, chiTieuName, dims)
+			cell := &Cell{
+				Value: solieu,
+				Ci:    ci,
+				Ri:    ri,
+			}
+			bm.Content[CellIndex{Ri: ri, Ci: ci}] = cell
+		}
 	}
 }
 
 func (bm *BieuMau) replaceContent(matrix [][]string) {
-	for i, row := range matrix {
-		for j, value := range row {
-			bm.Content[CellIndex{Ri: i, Ci: j}].Value = value
+	headerRows := getDepth(bm.ColTree)
+	headerCols := getDepth(bm.RowTree)
+
+	collectedValues := make(map[*PhanTo][]string)
+	seenValues := make(map[*PhanTo]map[string]bool)
+
+	addPhanToValue := func(pt *PhanTo, val string) {
+		if val == "" {
+			return
+		}
+		if len(pt.Children) > 0 {
+			for _, child := range pt.Children {
+				if seenValues[child] == nil {
+					seenValues[child] = make(map[string]bool)
+				}
+				if !seenValues[child][val] {
+					seenValues[child][val] = true
+					collectedValues[child] = append(collectedValues[child], val)
+				}
+			}
+		} else {
+			if seenValues[pt] == nil {
+				seenValues[pt] = make(map[string]bool)
+			}
+			if !seenValues[pt][val] {
+				seenValues[pt][val] = true
+				collectedValues[pt] = append(collectedValues[pt], val)
+			}
 		}
 	}
 
-	// TODO update column tree and row tree
+	findPhanTo := func(ptName string, chiTieuName string) *PhanTo {
+		if chiTieuName != "" {
+			var targetChiTieu *ChiTieu
+			for _, ct := range bm.ChiTieus {
+				if ct.Name == chiTieuName {
+					targetChiTieu = ct
+					break
+				}
+			}
+			if targetChiTieu != nil {
+				for _, pt := range targetChiTieu.PhanTos {
+					if pt.Name == ptName {
+						return pt
+					}
+				}
+			}
+		}
+		for _, pt := range bm.PhanToChungs {
+			if pt.Name == ptName {
+				return pt
+			}
+		}
+		for _, ct := range bm.ChiTieus {
+			for _, pt := range ct.PhanTos {
+				if pt.Name == ptName {
+					return pt
+				}
+			}
+		}
+		return nil
+	}
+
+	if len(matrix) > 0 {
+		for c := headerCols; c < len(matrix[0]); c++ {
+			var currentChiTieuName string
+			for r := 0; r < headerRows; r++ {
+				val := matrix[r][c]
+				for _, ct := range bm.ChiTieus {
+					if ct.Name == val {
+						currentChiTieuName = val
+						break
+					}
+				}
+			}
+
+			for r := 0; r < headerRows; {
+				val := matrix[r][c]
+				pt := findPhanTo(val, currentChiTieuName)
+				if pt != nil && r+1 < headerRows {
+					addPhanToValue(pt, matrix[r+1][c])
+					r += 2
+				} else {
+					r++
+				}
+			}
+		}
+	}
+
+	for r := headerRows; r < len(matrix); r++ {
+		var currentChiTieuName string
+		for c := 0; c < headerCols; c++ {
+			val := matrix[r][c]
+			for _, ct := range bm.ChiTieus {
+				if ct.Name == val {
+					currentChiTieuName = val
+					break
+				}
+			}
+		}
+
+		for c := 0; c < headerCols; {
+			val := matrix[r][c]
+			pt := findPhanTo(val, currentChiTieuName)
+			if pt != nil && c+1 < headerCols {
+				addPhanToValue(pt, matrix[r][c+1])
+				c += 2
+			} else {
+				c++
+			}
+		}
+	}
+
+	for pt, vals := range collectedValues {
+		pt.Values = vals
+	}
+
+	bm.derived()
+
+	bm.ColTree = &Node{}
+	bm.genTree(bm.ColTree, bm.Cols)
+	bm.RowTree = &Node{}
+	bm.genTree(bm.RowTree, bm.Rows)
+
+	newHeaderRows := getDepth(bm.ColTree)
+	newHeaderCols := getDepth(bm.RowTree)
+
+	colOffset := newHeaderCols
+	layoutColTree(bm.ColTree, -1, &colOffset)
+	rowOffset := newHeaderRows
+	layoutRowTree(bm.RowTree, -1, &rowOffset)
+
+	colLeaves := getLeaves(bm.ColTree)
+	rowLeaves := getLeaves(bm.RowTree)
+
+	colPaths := make(map[*Node][]PathNode)
+	collectLeafPaths(bm.ColTree, nil, &colPaths)
+
+	rowPaths := make(map[*Node][]PathNode)
+	collectLeafPaths(bm.RowTree, nil, &rowPaths)
+
+	numCols := len(colLeaves)
+	if numCols == 0 {
+		numCols = 1
+	}
+	numRows := len(rowLeaves)
+	if numRows == 0 {
+		numRows = 1
+	}
+
+	bm.BangChiTieus = []*BangChiTieu{}
+	bangMap := make(map[string]*BangChiTieu)
+	for _, ct := range bm.ChiTieus {
+		bct := &BangChiTieu{
+			ChiTieuName: ct.Name,
+			DongDuLieus: []*DongDuLieu{},
+		}
+		bm.BangChiTieus = append(bm.BangChiTieus, bct)
+		bangMap[ct.Name] = bct
+	}
+
+	for r := 0; r < numRows; r++ {
+		var rLeaf *Node
+		var rPath []PathNode
+		if r < len(rowLeaves) {
+			rLeaf = rowLeaves[r]
+			rPath = rowPaths[rLeaf]
+		}
+		ri := newHeaderRows + r
+		if rLeaf != nil {
+			ri = rLeaf.Ri
+		}
+
+		for c := 0; c < numCols; c++ {
+			var cLeaf *Node
+			var cPath []PathNode
+			if c < len(colLeaves) {
+				cLeaf = colLeaves[c]
+				cPath = colPaths[cLeaf]
+			}
+			ci := newHeaderCols + c
+			if cLeaf != nil {
+				ci = cLeaf.Ci
+			}
+
+			var chiTieuName string
+			var dims []*KV
+
+			for _, p := range rPath {
+				if p.Type == "chitieu" {
+					chiTieuName = p.Value
+				} else if p.Type == "phanto_value" {
+					if pt, ok := bm.phanTom[p.IDbm]; ok {
+						dims = append(dims, &KV{Key: pt.Name, Value: p.Value})
+					}
+				}
+			}
+			for _, p := range cPath {
+				if p.Type == "chitieu" {
+					chiTieuName = p.Value
+				} else if p.Type == "phanto_value" {
+					if pt, ok := bm.phanTom[p.IDbm]; ok {
+						dims = append(dims, &KV{Key: pt.Name, Value: p.Value})
+					}
+				}
+			}
+
+			if chiTieuName != "" {
+				val := ""
+				if ri < len(matrix) && ci < len(matrix[ri]) {
+					val = matrix[ri][ci]
+				}
+				bct := bangMap[chiTieuName]
+				if bct != nil {
+					bct.DongDuLieus = append(bct.DongDuLieus, &DongDuLieu{
+						Dims:   dims,
+						Solieu: val,
+					})
+				}
+			}
+		}
+	}
+
+	bm.genContent()
 }
 
 func (bm *BieuMau) setupFullFlattable() {
@@ -484,6 +914,121 @@ func (bm *BieuMau) setupFullFlattable() {
 	bm.genContent()
 }
 
-func main() {
+func printContent(bm *BieuMau) {
+	maxRi := 0
+	maxCi := 0
+	for idx := range bm.Content {
+		if idx.Ri > maxRi {
+			maxRi = idx.Ri
+		}
+		if idx.Ci > maxCi {
+			maxCi = idx.Ci
+		}
+	}
 
+	matrix := make([][]string, maxRi+1)
+	for i := range matrix {
+		matrix[i] = make([]string, maxCi+1)
+	}
+
+	for idx, cell := range bm.Content {
+		matrix[idx.Ri][idx.Ci] = cell.Value
+	}
+
+	for i, row := range matrix {
+		for _, val := range row {
+			if val == "" {
+				val = "-"
+			}
+			fmt.Printf("%15s\t", val)
+		}
+		fmt.Println()
+		if i == getDepth(bm.ColTree)-1 {
+			for range row {
+				fmt.Print("----------------\t")
+			}
+			fmt.Println()
+		}
+	}
+	fmt.Println()
+}
+
+func main() {
+	bm := &BieuMau{
+		ChiTieus: []*ChiTieu{
+			{
+				Name: "Doanh thu",
+				PhanTos: []*PhanTo{
+					{Name: "Vùng miền", Values: []string{"Miền Bắc", "Miền Nam"}},
+					{Name: "Hình thức", Values: []string{"Bán lẻ"}},
+				},
+			},
+			{
+				Name: "Chi phí",
+				PhanTos: []*PhanTo{
+					{Name: "Vùng miền", Values: []string{"Miền Bắc", "Miền Nam"}},
+					{Name: "Loại CP", Values: []string{"Vận hành"}},
+				},
+			},
+		},
+		BangChiTieus: []*BangChiTieu{
+			{
+				ChiTieuName: "Doanh thu",
+				DongDuLieus: []*DongDuLieu{
+					{
+						Dims: []*KV{
+							{Key: "Vùng miền", Value: "Miền Bắc"},
+							{Key: "Hình thức", Value: "Bán lẻ"},
+						},
+						Solieu: "100",
+					},
+					{
+						Dims: []*KV{
+							{Key: "Vùng miền", Value: "Miền Nam"},
+							{Key: "Hình thức", Value: "Bán lẻ"},
+						},
+						Solieu: "150",
+					},
+				},
+			},
+			{
+				ChiTieuName: "Chi phí",
+				DongDuLieus: []*DongDuLieu{
+					{
+						Dims: []*KV{
+							{Key: "Vùng miền", Value: "Miền Bắc"},
+							{Key: "Loại CP", Value: "Vận hành"},
+						},
+						Solieu: "80",
+					},
+					{
+						Dims: []*KV{
+							{Key: "Vùng miền", Value: "Miền Nam"},
+							{Key: "Loại CP", Value: "Vận hành"},
+						},
+						Solieu: "120",
+					},
+				},
+			},
+		},
+	}
+
+	fmt.Println("=== 1. KHỞI TẠO BẢNG FLAT ===")
+	bm.setupFullFlattable()
+	printContent(bm)
+
+	fmt.Println("=== 2. GIẢ LẬP EDIT TRÊN EXCEL (Thêm Miền Trung và CP Bán buôn) ===")
+	editedMatrix := [][]string{
+		{"Vùng miền", "Vùng miền", "Vùng miền", "Vùng miền", "Vùng miền", "Vùng miền", "Vùng miền"},
+		{"Miền Bắc", "Miền Trung", "Miền Nam", "Miền Bắc", "Miền Trung", "Miền Nam", "Miền Nam"},
+		{"Doanh thu", "Doanh thu", "Doanh thu", "Chi phí", "Chi phí", "Chi phí", "Chi phí"},
+		{"Hình thức", "Hình thức", "Hình thức", "Loại CP", "Loại CP", "Loại CP", "Loại CP"},
+		{"Bán lẻ", "Bán lẻ", "Bán lẻ", "Vận hành", "Vận hành", "Vận hành", "Bán buôn"},
+		{"100", "110", "150", "80", "90", "120", "200"},
+	}
+
+	bm.replaceContent(editedMatrix)
+
+	fmt.Println("=== 3. KẾT QUẢ SAU KHI IMPORT NGƯỢC ===")
+	printContent(bm)
 }
