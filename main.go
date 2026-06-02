@@ -62,10 +62,10 @@ type BieuMau struct {
 	chiTieum map[int]*ChiTieu // derived
 	phanTom  map[int]*PhanTo  // derived
 
-	Cols    []int // phan to idbmstr and chi tieu idbmstr
+	Cols    []int // phan to and chi tieu idbm
 	ColTree *Node
 
-	Rows    []int // phan to idbmstr and chi tieu idbmstr
+	Rows    []int // phan to and chi tieu idbm
 	RowTree *Node
 
 	Content map[CellIndex]*Cell
