@@ -244,6 +244,143 @@ func TestMatrixChitieuInRowsFlow(t *testing.T) {
 	}
 }
 
+func TestColCollapseGenContent(t *testing.T) {
+	bm := createSampleBieuMau()
+	bm.HeaderType = "matrix_chitieu_in_cols"
+	bm.ColCollapse = true
+	bm.setupFull()
+
+	// headerRows=1, headerCols=getDepth(RowTree)=2
+	// ColTree collapsed: all col-header nodes at Ri=0
+	// Col headers (Ri=0): DT@Ci=2, Hình thức@Ci=3, Bán lẻ@Ci=4, CP@Ci=5, Loại CP@Ci=6, Vận hành@Ci=7
+	// Row headers (non-collapsed): Vùng miền@(Ri=1,Ci=0), Bắc@(Ri=1,Ci=1), Nam@(Ri=2,Ci=1)
+	// Data: (Ri=1,Ci=4)=100, (Ri=1,Ci=7)=80, (Ri=2,Ci=4)=150, (Ri=2,Ci=7)=120
+
+	// All col-header cells must be in Ri=0
+	for idx, cell := range bm.Content {
+		if cell.Node != nil && cell.Node.Type != "" {
+			// check if it's a col-tree node
+			isColNode := false
+			var checkNode func(n *Node) bool
+			checkNode = func(n *Node) bool {
+				if n == cell.Node {
+					return true
+				}
+				for _, c := range n.Children {
+					if checkNode(c) {
+						return true
+					}
+				}
+				return false
+			}
+			isColNode = checkNode(bm.ColTree)
+			if isColNode && idx.Ri != 0 {
+				t.Errorf("ColCollapse: col-header node at Ri=%d (want 0), cell=%+v", idx.Ri, idx)
+			}
+		}
+	}
+
+	expectedHeaders := map[CellIndex]string{
+		{Ri: 0, Ci: 2}: "Doanh thu",
+		{Ri: 0, Ci: 3}: "Hình thức",
+		{Ri: 0, Ci: 4}: "Bán lẻ",
+		{Ri: 0, Ci: 5}: "Chi phí",
+		{Ri: 0, Ci: 6}: "Loại CP",
+		{Ri: 0, Ci: 7}: "Vận hành",
+	}
+	for idx, want := range expectedHeaders {
+		cell, exists := bm.Content[idx]
+		if !exists {
+			t.Errorf("ColCollapse header cell at %+v not found", idx)
+		} else if cell.Value != want {
+			t.Errorf("ColCollapse header cell at %+v = %q, want %q", idx, cell.Value, want)
+		}
+	}
+
+	expectedData := map[CellIndex]string{
+		{Ri: 1, Ci: 4}: "100",
+		{Ri: 1, Ci: 7}: "80",
+		{Ri: 2, Ci: 4}: "150",
+		{Ri: 2, Ci: 7}: "120",
+	}
+	for idx, want := range expectedData {
+		cell, exists := bm.Content[idx]
+		if !exists {
+			t.Errorf("ColCollapse data cell at %+v not found", idx)
+		} else if cell.Value != want {
+			t.Errorf("ColCollapse data cell at %+v = %q, want %q", idx, cell.Value, want)
+		}
+	}
+}
+
+func TestRowRollapseGenContent(t *testing.T) {
+	bm := createSampleBieuMau()
+	bm.HeaderType = "matrix_chitieu_in_rows"
+	bm.RowRollapse = true
+	bm.setupFull()
+
+	// headerCols=1, headerRows=getDepth(ColTree)=2
+	// RowTree collapsed: all row-header nodes at Ci=0
+	// Row headers (Ci=0): DT@Ri=2, Hình thức@Ri=3, Bán lẻ@Ri=4, CP@Ri=5, Loại CP@Ri=6, Vận hành@Ri=7
+	// Col headers (non-collapsed): Vùng miền@(Ri=0,Ci=1), Bắc@(Ri=1,Ci=1), Nam@(Ri=1,Ci=2)
+	// Data: (Ri=4,Ci=1)=100, (Ri=4,Ci=2)=150, (Ri=7,Ci=1)=80, (Ri=7,Ci=2)=120
+
+	// All row-header cells must be in Ci=0
+	for idx, cell := range bm.Content {
+		if cell.Node != nil && cell.Node.Type != "" {
+			isRowNode := false
+			var checkNode func(n *Node) bool
+			checkNode = func(n *Node) bool {
+				if n == cell.Node {
+					return true
+				}
+				for _, c := range n.Children {
+					if checkNode(c) {
+						return true
+					}
+				}
+				return false
+			}
+			isRowNode = checkNode(bm.RowTree)
+			if isRowNode && idx.Ci != 0 {
+				t.Errorf("RowRollapse: row-header node at Ci=%d (want 0), cell=%+v", idx.Ci, idx)
+			}
+		}
+	}
+
+	expectedHeaders := map[CellIndex]string{
+		{Ri: 2, Ci: 0}: "Doanh thu",
+		{Ri: 3, Ci: 0}: "Hình thức",
+		{Ri: 4, Ci: 0}: "Bán lẻ",
+		{Ri: 5, Ci: 0}: "Chi phí",
+		{Ri: 6, Ci: 0}: "Loại CP",
+		{Ri: 7, Ci: 0}: "Vận hành",
+	}
+	for idx, want := range expectedHeaders {
+		cell, exists := bm.Content[idx]
+		if !exists {
+			t.Errorf("RowRollapse header cell at %+v not found", idx)
+		} else if cell.Value != want {
+			t.Errorf("RowRollapse header cell at %+v = %q, want %q", idx, cell.Value, want)
+		}
+	}
+
+	expectedData := map[CellIndex]string{
+		{Ri: 4, Ci: 1}: "100",
+		{Ri: 4, Ci: 2}: "150",
+		{Ri: 7, Ci: 1}: "80",
+		{Ri: 7, Ci: 2}: "120",
+	}
+	for idx, want := range expectedData {
+		cell, exists := bm.Content[idx]
+		if !exists {
+			t.Errorf("RowRollapse data cell at %+v not found", idx)
+		} else if cell.Value != want {
+			t.Errorf("RowRollapse data cell at %+v = %q, want %q", idx, cell.Value, want)
+		}
+	}
+}
+
 func TestMatrixChitieuInColsFlow(t *testing.T) {
 	bm := createSampleBieuMau()
 	bm.HeaderType = "matrix_chitieu_in_cols"

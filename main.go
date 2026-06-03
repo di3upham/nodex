@@ -175,4 +175,38 @@ func main() {
 
 	fmt.Println("=== 9. KẾT QUẢ SAU KHI IMPORT NGƯỢC MATRIX (CHỈ TIÊU Ở CỘT) ===")
 	printContent(bmMatrixCols)
+
+
+	fmt.Println("=== 10. KHỞI TẠO BẢNG MATRIX (CHỈ TIÊU Ở DÒNG) + ROWROLLAPSE ===")
+	bmRowCollapse := createSampleBieuMau()
+	bmRowCollapse.HeaderType = "matrix_chitieu_in_rows"
+	bmRowCollapse.RowRollapse = true
+	bmRowCollapse.setupFull()
+	printContent(bmRowCollapse)
+
+	// Collapsed row-header (col 0) layout:
+	//   row 2: Doanh thu  | ...
+	//   row 3: Hình thức  | ...
+	//   row 4: Bán lẻ     | 100 | 150
+	//   row 5: Chi phí    | ...
+	//   row 6: Loại CP    | ...
+	//   row 7: Vận hành   | 80  | 120
+	// Import adds "Miền Trung" (col header) and "Bán buôn" under Hình thức (row header)
+	fmt.Println("=== 11. GIẢ LẬP EDIT TRÊN EXCEL (ROWROLLAPSE, Thêm Miền Trung và DT Bán buôn) ===")
+	editedRowCollapse := [][]string{
+		{"-", "Vùng miền", "Vùng miền", "Vùng miền"},
+		{"-", "Miền Bắc", "Miền Trung", "Miền Nam"},
+		{"Doanh thu", "-", "-", "-"},
+		{"Hình thức", "-", "-", "-"},
+		{"Bán lẻ", "100", "110", "150"},
+		{"Bán buôn", "-", "-", "200"},
+		{"Chi phí", "-", "-", "-"},
+		{"Loại CP", "-", "-", "-"},
+		{"Vận hành", "80", "90", "120"},
+	}
+
+	bmRowCollapse.replaceContent(editedRowCollapse)
+
+	fmt.Println("=== 12. KẾT QUẢ SAU KHI IMPORT NGƯỢC (ROWROLLAPSE) ===")
+	printContent(bmRowCollapse)
 }

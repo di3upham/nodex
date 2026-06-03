@@ -14,8 +14,6 @@ type PhanTo struct {
 	Name   string // uniq in ChiTieu
 	Values []string
 
-	ValueIsFixed bool // false(default) is can append new value, true is keep values fixed
-
 	// only in bieu mau
 	ChiTieuIDbm int
 	IDbm        int
@@ -66,10 +64,12 @@ type BieuMau struct {
 
 	Cols        []int // phan to and chi tieu idbm
 	ColTree     *Node
+	ColLeafs    []int // derived from ColTree, "phan to and chi tieu idbm" are only in leaf nodes
 	ColCollapse bool
 
 	Rows        []int // phan to and chi tieu idbm
 	RowTree     *Node
+	RowLeafs    []int // derived from RowTree, "phan to and chi tieu idbm" are only in leaf nodes
 	RowRollapse bool
 
 	Content map[CellIndex]*Cell
@@ -497,6 +497,64 @@ func getLeaves(node *Node) []*Node {
 	return leaves
 }
 
+func getLeafIdbms(node *Node) []int {
+	leaves := getLeaves(node)
+	var idbms []int
+	seen := make(map[int]bool)
+	for _, leaf := range leaves {
+		if len(leaf.IDbms) > 0 {
+			id := leaf.IDbms[0]
+			if !seen[id] {
+				seen[id] = true
+				idbms = append(idbms, id)
+			}
+		}
+	}
+	return idbms
+}
+
+func getAllNodesPreOrder(node *Node) []*Node {
+	if node == nil {
+		return nil
+	}
+	var nodes []*Node
+	if node.Type != "" {
+		nodes = append(nodes, node)
+	}
+	for _, child := range node.Children {
+		nodes = append(nodes, getAllNodesPreOrder(child)...)
+	}
+	return nodes
+}
+
+func layoutColTreeCollapsed(node *Node, rowOffset int, colOffset *int) {
+	if node == nil {
+		return
+	}
+	if node.Type != "" {
+		node.Ri = rowOffset
+		node.Ci = *colOffset
+		*colOffset++
+	}
+	for _, child := range node.Children {
+		layoutColTreeCollapsed(child, rowOffset, colOffset)
+	}
+}
+
+func layoutRowTreeCollapsed(node *Node, colOffset int, rowOffset *int) {
+	if node == nil {
+		return
+	}
+	if node.Type != "" {
+		node.Ci = colOffset
+		node.Ri = *rowOffset
+		*rowOffset++
+	}
+	for _, child := range node.Children {
+		layoutRowTreeCollapsed(child, colOffset, rowOffset)
+	}
+}
+
 func collectLeafPaths(node *Node, currentPath []PathNode, paths *map[*Node][]PathNode) {
 	if node == nil {
 		return
@@ -524,6 +582,88 @@ func collectLeafPaths(node *Node, currentPath []PathNode, paths *map[*Node][]Pat
 	for _, child := range node.Children {
 		collectLeafPaths(child, newPath, paths)
 	}
+}
+
+func makeIntSet(ids []int) map[int]bool {
+	s := make(map[int]bool, len(ids))
+	for _, id := range ids {
+		s[id] = true
+	}
+	return s
+}
+
+func findChiTieu(bm *BieuMau, val string) string {
+	for _, ct := range bm.ChiTieus {
+		if ct.Name == val {
+			return ct.Name
+		}
+	}
+	return ""
+}
+
+// isLeafPhanTo returns true if pt itself or any of its children (PhanToChung) is in the leaf set.
+func isLeafPhanTo(pt *PhanTo, leafSet map[int]bool) bool {
+	if len(pt.Children) == 0 {
+		return leafSet[pt.IDbm]
+	}
+	for _, child := range pt.Children {
+		if leafSet[child.IDbm] {
+			return true
+		}
+	}
+	return false
+}
+
+func buildCiPathMap(tree *Node) map[int][]PathNode {
+	paths := make(map[*Node][]PathNode)
+	collectLeafPaths(tree, nil, &paths)
+	m := make(map[int][]PathNode)
+	for _, leaf := range getLeaves(tree) {
+		if path, ok := paths[leaf]; ok {
+			m[leaf.Ci] = path
+		}
+	}
+	return m
+}
+
+func buildRiPathMap(tree *Node) map[int][]PathNode {
+	paths := make(map[*Node][]PathNode)
+	collectLeafPaths(tree, nil, &paths)
+	m := make(map[int][]PathNode)
+	for _, leaf := range getLeaves(tree) {
+		if path, ok := paths[leaf]; ok {
+			m[leaf.Ri] = path
+		}
+	}
+	return m
+}
+
+func extractFromPaths(bm *BieuMau, cPath, rPath []PathNode) (string, []*KV) {
+	var chiTieuName string
+	var dims []*KV
+	for _, p := range cPath {
+		switch p.Type {
+		case "chitieu":
+			chiTieuName = p.Value
+		case "phanto_value":
+			if pt, ok := bm.phanTom[p.IDbm]; ok {
+				dims = append(dims, &KV{Key: pt.Name, Value: p.Value})
+			}
+		}
+	}
+	for _, p := range rPath {
+		switch p.Type {
+		case "chitieu":
+			if chiTieuName == "" {
+				chiTieuName = p.Value
+			}
+		case "phanto_value":
+			if pt, ok := bm.phanTom[p.IDbm]; ok {
+				dims = append(dims, &KV{Key: pt.Name, Value: p.Value})
+			}
+		}
+	}
+	return chiTieuName, dims
 }
 
 func matchDims(dims1, dims2 []*KV) bool {
@@ -568,14 +708,31 @@ func findSoLieu(bm *BieuMau, chiTieuName string, dims []*KV) string {
 func (bm *BieuMau) genContent() {
 	bm.Content = make(map[CellIndex]*Cell)
 
-	headerRows := getDepth(bm.ColTree)
-	headerCols := getDepth(bm.RowTree)
+	var headerRows, headerCols int
+	if bm.ColCollapse {
+		headerRows = 1
+	} else {
+		headerRows = getDepth(bm.ColTree)
+	}
+	if bm.RowRollapse {
+		headerCols = 1
+	} else {
+		headerCols = getDepth(bm.RowTree)
+	}
 
 	colOffset := headerCols
-	layoutColTree(bm.ColTree, -1, &colOffset)
+	if bm.ColCollapse {
+		layoutColTreeCollapsed(bm.ColTree, 0, &colOffset)
+	} else {
+		layoutColTree(bm.ColTree, -1, &colOffset)
+	}
 
 	rowOffset := headerRows
-	layoutRowTree(bm.RowTree, -1, &rowOffset)
+	if bm.RowRollapse {
+		layoutRowTreeCollapsed(bm.RowTree, 0, &rowOffset)
+	} else {
+		layoutRowTree(bm.RowTree, -1, &rowOffset)
+	}
 
 	var traverse func(n *Node)
 	traverse = func(n *Node) {
@@ -689,8 +846,17 @@ func (bm *BieuMau) genContent() {
 }
 
 func (bm *BieuMau) replaceContent(matrix [][]string) {
-	headerRows := getDepth(bm.ColTree)
-	headerCols := getDepth(bm.RowTree)
+	var headerRows, headerCols int
+	if bm.ColCollapse {
+		headerRows = 1
+	} else {
+		headerRows = getDepth(bm.ColTree)
+	}
+	if bm.RowRollapse {
+		headerCols = 1
+	} else {
+		headerCols = getDepth(bm.RowTree)
+	}
 
 	collectedValues := make(map[*PhanTo][]string)
 	seenValues := make(map[*PhanTo]map[string]bool)
@@ -752,10 +918,76 @@ func (bm *BieuMau) replaceContent(matrix [][]string) {
 		return nil
 	}
 
-	if len(matrix) > 0 {
-		for c := headerCols; c < len(matrix[0]); c++ {
+	// Parse col headers to collect new PhanTo values
+	if bm.ColCollapse {
+		colLeafSet := makeIntSet(bm.ColLeafs)
+		if len(matrix) > 0 {
+			var curPT *PhanTo
+			var curCT string
+			for c := headerCols; c < len(matrix[0]); c++ {
+				val := matrix[0][c]
+				if ct := findChiTieu(bm, val); ct != "" {
+					curCT, curPT = ct, nil
+					continue
+				}
+				if pt := findPhanTo(val, curCT); pt != nil {
+					curPT = pt
+				} else if curPT != nil && isLeafPhanTo(curPT, colLeafSet) {
+					addPhanToValue(curPT, val)
+				}
+			}
+		}
+	} else {
+		if len(matrix) > 0 {
+			for c := headerCols; c < len(matrix[0]); c++ {
+				var currentChiTieuName string
+				for r := 0; r < headerRows; r++ {
+					val := matrix[r][c]
+					for _, ct := range bm.ChiTieus {
+						if ct.Name == val {
+							currentChiTieuName = val
+							break
+						}
+					}
+				}
+				for r := 0; r < headerRows; {
+					val := matrix[r][c]
+					pt := findPhanTo(val, currentChiTieuName)
+					if pt != nil && r+1 < headerRows {
+						addPhanToValue(pt, matrix[r+1][c])
+						r += 2
+					} else {
+						r++
+					}
+				}
+			}
+		}
+	}
+
+	// Parse row headers to collect new PhanTo values
+	if bm.RowRollapse {
+		rowLeafSet := makeIntSet(bm.RowLeafs)
+		var curPT *PhanTo
+		var curCT string
+		for r := headerRows; r < len(matrix); r++ {
+			if len(matrix[r]) == 0 {
+				continue
+			}
+			val := matrix[r][0]
+			if ct := findChiTieu(bm, val); ct != "" {
+				curCT, curPT = ct, nil
+				continue
+			}
+			if pt := findPhanTo(val, curCT); pt != nil {
+				curPT = pt
+			} else if curPT != nil && isLeafPhanTo(curPT, rowLeafSet) {
+				addPhanToValue(curPT, val)
+			}
+		}
+	} else {
+		for r := headerRows; r < len(matrix); r++ {
 			var currentChiTieuName string
-			for r := 0; r < headerRows; r++ {
+			for c := 0; c < headerCols; c++ {
 				val := matrix[r][c]
 				for _, ct := range bm.ChiTieus {
 					if ct.Name == val {
@@ -764,40 +996,15 @@ func (bm *BieuMau) replaceContent(matrix [][]string) {
 					}
 				}
 			}
-
-			for r := 0; r < headerRows; {
+			for c := 0; c < headerCols; {
 				val := matrix[r][c]
 				pt := findPhanTo(val, currentChiTieuName)
-				if pt != nil && r+1 < headerRows {
-					addPhanToValue(pt, matrix[r+1][c])
-					r += 2
+				if pt != nil && c+1 < headerCols {
+					addPhanToValue(pt, matrix[r][c+1])
+					c += 2
 				} else {
-					r++
+					c++
 				}
-			}
-		}
-	}
-
-	for r := headerRows; r < len(matrix); r++ {
-		var currentChiTieuName string
-		for c := 0; c < headerCols; c++ {
-			val := matrix[r][c]
-			for _, ct := range bm.ChiTieus {
-				if ct.Name == val {
-					currentChiTieuName = val
-					break
-				}
-			}
-		}
-
-		for c := 0; c < headerCols; {
-			val := matrix[r][c]
-			pt := findPhanTo(val, currentChiTieuName)
-			if pt != nil && c+1 < headerCols {
-				addPhanToValue(pt, matrix[r][c+1])
-				c += 2
-			} else {
-				c++
 			}
 		}
 	}
@@ -812,31 +1019,32 @@ func (bm *BieuMau) replaceContent(matrix [][]string) {
 	bm.genTree(bm.ColTree, bm.Cols)
 	bm.RowTree = &Node{}
 	bm.genTree(bm.RowTree, bm.Rows)
+	bm.ColLeafs = getLeafIdbms(bm.ColTree)
+	bm.RowLeafs = getLeafIdbms(bm.RowTree)
 
-	newHeaderRows := getDepth(bm.ColTree)
-	newHeaderCols := getDepth(bm.RowTree)
-
-	colOffset := newHeaderCols
-	layoutColTree(bm.ColTree, -1, &colOffset)
-	rowOffset := newHeaderRows
-	layoutRowTree(bm.RowTree, -1, &rowOffset)
-
-	colLeaves := getLeaves(bm.ColTree)
-	rowLeaves := getLeaves(bm.RowTree)
-
-	colPaths := make(map[*Node][]PathNode)
-	collectLeafPaths(bm.ColTree, nil, &colPaths)
-
-	rowPaths := make(map[*Node][]PathNode)
-	collectLeafPaths(bm.RowTree, nil, &rowPaths)
-
-	numCols := len(colLeaves)
-	if numCols == 0 {
-		numCols = 1
+	var newHR, newHC int
+	if bm.ColCollapse {
+		newHR = 1
+	} else {
+		newHR = getDepth(bm.ColTree)
 	}
-	numRows := len(rowLeaves)
-	if numRows == 0 {
-		numRows = 1
+	if bm.RowRollapse {
+		newHC = 1
+	} else {
+		newHC = getDepth(bm.RowTree)
+	}
+
+	colOffset := newHC
+	if bm.ColCollapse {
+		layoutColTreeCollapsed(bm.ColTree, 0, &colOffset)
+	} else {
+		layoutColTree(bm.ColTree, -1, &colOffset)
+	}
+	rowOffset := newHR
+	if bm.RowRollapse {
+		layoutRowTreeCollapsed(bm.RowTree, 0, &rowOffset)
+	} else {
+		layoutRowTree(bm.RowTree, -1, &rowOffset)
 	}
 
 	bm.BangChiTieus = []*BangChiTieu{}
@@ -850,66 +1058,96 @@ func (bm *BieuMau) replaceContent(matrix [][]string) {
 		bangMap[ct.Name] = bct
 	}
 
-	for r := headerRows; r < len(matrix); r++ {
-		for c := headerCols; c < len(matrix[r]); c++ {
-			var chiTieuNameCol string
-			var dimsCol []*KV
-			for ri := 0; ri < headerRows; ri++ {
-				val := matrix[ri][c]
-				for _, ct := range bm.ChiTieus {
-					if ct.Name == val {
-						chiTieuNameCol = val
-						break
+	if bm.ColCollapse || bm.RowRollapse {
+		ciToPath := buildCiPathMap(bm.ColTree)
+		riToPath := buildRiPathMap(bm.RowTree)
+		colHasLeaves := len(getLeaves(bm.ColTree)) > 0
+		rowHasLeaves := len(getLeaves(bm.RowTree)) > 0
+
+		for r := headerRows; r < len(matrix); r++ {
+			rPath, hasR := riToPath[r]
+			if !hasR && rowHasLeaves {
+				continue
+			}
+			for c := headerCols; c < len(matrix[r]); c++ {
+				cPath, hasC := ciToPath[c]
+				if !hasC && colHasLeaves {
+					continue
+				}
+				chiTieuName, dims := extractFromPaths(bm, cPath, rPath)
+				if chiTieuName != "" {
+					bct := bangMap[chiTieuName]
+					if bct != nil {
+						bct.DongDuLieus = append(bct.DongDuLieus, &DongDuLieu{
+							Dims:   dims,
+							Solieu: matrix[r][c],
+						})
 					}
 				}
 			}
-			for ri := 0; ri < headerRows; {
-				val := matrix[ri][c]
-				pt := findPhanTo(val, chiTieuNameCol)
-				if pt != nil && ri+1 < headerRows {
-					dimsCol = append(dimsCol, &KV{Key: pt.Name, Value: matrix[ri+1][c]})
-					ri += 2
-				} else {
-					ri++
-				}
-			}
-
-			var chiTieuNameRow string
-			var dimsRow []*KV
-			for ci := 0; ci < headerCols; ci++ {
-				val := matrix[r][ci]
-				for _, ct := range bm.ChiTieus {
-					if ct.Name == val {
-						chiTieuNameRow = val
-						break
+		}
+	} else {
+		for r := headerRows; r < len(matrix); r++ {
+			for c := headerCols; c < len(matrix[r]); c++ {
+				var chiTieuNameCol string
+				var dimsCol []*KV
+				for ri := 0; ri < headerRows; ri++ {
+					val := matrix[ri][c]
+					for _, ct := range bm.ChiTieus {
+						if ct.Name == val {
+							chiTieuNameCol = val
+							break
+						}
 					}
 				}
-			}
-			for ci := 0; ci < headerCols; {
-				val := matrix[r][ci]
-				pt := findPhanTo(val, chiTieuNameRow)
-				if pt != nil && ci+1 < headerCols {
-					dimsRow = append(dimsRow, &KV{Key: pt.Name, Value: matrix[r][ci+1]})
-					ci += 2
-				} else {
-					ci++
+				for ri := 0; ri < headerRows; {
+					val := matrix[ri][c]
+					pt := findPhanTo(val, chiTieuNameCol)
+					if pt != nil && ri+1 < headerRows {
+						dimsCol = append(dimsCol, &KV{Key: pt.Name, Value: matrix[ri+1][c]})
+						ri += 2
+					} else {
+						ri++
+					}
 				}
-			}
 
-			chiTieuName := chiTieuNameCol
-			if chiTieuName == "" {
-				chiTieuName = chiTieuNameRow
-			}
+				var chiTieuNameRow string
+				var dimsRow []*KV
+				for ci := 0; ci < headerCols; ci++ {
+					val := matrix[r][ci]
+					for _, ct := range bm.ChiTieus {
+						if ct.Name == val {
+							chiTieuNameRow = val
+							break
+						}
+					}
+				}
+				for ci := 0; ci < headerCols; {
+					val := matrix[r][ci]
+					pt := findPhanTo(val, chiTieuNameRow)
+					if pt != nil && ci+1 < headerCols {
+						dimsRow = append(dimsRow, &KV{Key: pt.Name, Value: matrix[r][ci+1]})
+						ci += 2
+					} else {
+						ci++
+					}
+				}
 
-			if chiTieuName != "" {
-				dims := append(dimsCol, dimsRow...)
-				val := matrix[r][c]
-				bct := bangMap[chiTieuName]
-				if bct != nil {
-					bct.DongDuLieus = append(bct.DongDuLieus, &DongDuLieu{
-						Dims:   dims,
-						Solieu: val,
-					})
+				chiTieuName := chiTieuNameCol
+				if chiTieuName == "" {
+					chiTieuName = chiTieuNameRow
+				}
+
+				if chiTieuName != "" {
+					dims := append(dimsCol, dimsRow...)
+					val := matrix[r][c]
+					bct := bangMap[chiTieuName]
+					if bct != nil {
+						bct.DongDuLieus = append(bct.DongDuLieus, &DongDuLieu{
+							Dims:   dims,
+							Solieu: val,
+						})
+					}
 				}
 			}
 		}
@@ -925,6 +1163,8 @@ func (bm *BieuMau) setupFull() {
 	bm.genTree(bm.ColTree, bm.Cols)
 	bm.RowTree = &Node{}
 	bm.genTree(bm.RowTree, bm.Rows)
+	bm.ColLeafs = getLeafIdbms(bm.ColTree)
+	bm.RowLeafs = getLeafIdbms(bm.RowTree)
 	bm.genContent()
 }
 
