@@ -1455,12 +1455,15 @@ func (bm *BieuMau) importFromMatrix(matrix [][]string) {
 }
 
 func (bm *BieuMau) setupFull() {
-	bm.setupBase()
+	bm.genPhanToChung()
+	bm.derived()
 	bm.genHeaders()
 	bm.ColTree = &Node{}
 	bm.genTree(bm.ColTree, bm.Cols)
 	bm.RowTree = &Node{}
 	bm.genTree(bm.RowTree, bm.Rows)
+
+	// for content
 	bm.ColLeafs = getLeafIdbms(bm.ColTree)
 	bm.RowLeafs = getLeafIdbms(bm.RowTree)
 	bm.genContent()

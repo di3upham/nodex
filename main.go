@@ -143,11 +143,12 @@ func main() {
 	// - Add "Miền Trung" as a 3rd data column
 	// - Add "Bán buôn" under "Chi phí" as an extra row
 	editedMatrixInRows := [][]string{
-		{"-", "-", "-", "Vùng miền", "Vùng miền", "Vùng miền"},
-		{"-", "-", "-", "Miền Bắc", "Miền Trung", "Miền Nam"},
-		{"Doanh thu", "Hình thức", "Bán lẻ", "100", "110", "150"},
-		{"Chi phí", "Loại CP", "Vận hành", "80", "90", "120"},
-		{"Chi phí", "Loại CP", "Bán buôn", "-", "-", "200"},
+		{"-", "-", "-", "Vùng miền", "Vùng miền", "Vùng miền", "-"},
+		{"-", "-", "-", "Miền Bắc", "Miền Trung", "Miền Nam", "-"},
+		{"Doanh thu", "Hình thức", "Bán lẻ", "100", "110", "150", "-"},
+		{"Chi phí", "Loại CP", "Vận hành", "80", "90", "120", "-"},
+		{"Chi phí", "Loại CP", "Bán buôn", "-", "-", "200", "-"},
+		{"-", "-", "-", "-", "-", "-", "-"},
 	}
 
 	bmMatrix.importFromMatrix(editedMatrixInRows)
@@ -163,12 +164,13 @@ func main() {
 
 	fmt.Println("=== 8. GIẢ LẬP EDIT TRÊN EXCEL MATRIX (CHỈ TIÊU Ở CỘT) (Thêm Miền Trung và CP Bán buôn) ===")
 	editedMatrixInCols := [][]string{
-		{"-", "-", "Doanh thu", "Chi phí", "Chi phí"},
-		{"-", "-", "Hình thức", "Loại CP", "Loại CP"},
-		{"-", "-", "Bán lẻ", "Vận hành", "Bán buôn"},
-		{"Vùng miền", "Miền Bắc", "100", "80", "-"},
-		{"Vùng miền", "Miền Trung", "110", "90", "-"},
-		{"Vùng miền", "Miền Nam", "150", "120", "200"},
+		{"-", "-", "Doanh thu", "Chi phí", "Chi phí", "-"},
+		{"-", "-", "Hình thức", "Loại CP", "Loại CP", "-"},
+		{"-", "-", "Bán lẻ", "Vận hành", "Bán buôn", "-"},
+		{"Vùng miền", "Miền Bắc", "100", "80", "-", "-"},
+		{"Vùng miền", "Miền Trung", "110", "90", "-", "-"},
+		{"Vùng miền", "Miền Nam", "150", "120", "200", "-"},
+		{"-", "-", "-", "-", "-", "-"},
 	}
 
 	bmMatrixCols.importFromMatrix(editedMatrixInCols)
@@ -193,15 +195,16 @@ func main() {
 	// Import adds "Miền Trung" (col header) and "Bán buôn" under Hình thức (row header)
 	fmt.Println("=== 11. GIẢ LẬP EDIT TRÊN EXCEL (ROWROLLAPSE, Thêm Miền Trung và DT Bán buôn) ===")
 	editedRowCollapse := [][]string{
-		{"-", "Vùng miền", "Vùng miền", "Vùng miền"},
-		{"-", "Miền Bắc", "Miền Trung", "Miền Nam"},
-		{"Doanh thu", "-", "-", "-"},
-		{"Hình thức", "-", "-", "-"},
-		{"Bán lẻ", "100", "110", "150"},
-		{"Bán buôn", "-", "-", "200"},
-		{"Chi phí", "-", "-", "-"},
-		{"Loại CP", "-", "-", "-"},
-		{"Vận hành", "80", "90", "120"},
+		{"-", "Vùng miền", "Vùng miền", "Vùng miền", "-"},
+		{"-", "Miền Bắc", "Miền Trung", "Miền Nam", "-"},
+		{"Doanh thu", "-", "-", "-", "-"},
+		{"Hình thức", "-", "-", "-", "-"},
+		{"Bán lẻ", "100", "110", "150", "-"},
+		{"Bán buôn", "-", "-", "200", "-"},
+		{"Chi phí", "-", "-", "-", "-"},
+		{"Loại CP", "-", "-", "-", "-"},
+		{"Vận hành", "80", "90", "120", "-"},
+		{"-", "-", "-", "-", "-"},
 	}
 
 	bmRowCollapse.importFromMatrix(editedRowCollapse)
