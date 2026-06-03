@@ -1151,6 +1151,309 @@ func (bm *BieuMau) replaceContent(matrix [][]string) {
 	bm.genContent()
 }
 
+func (bm *BieuMau) importFromMatrix(matrix [][]string) {
+	var headerRows, headerCols int
+	if bm.ColCollapse {
+		headerRows = 1
+	} else {
+		headerRows = getDepth(bm.ColTree)
+	}
+	if bm.RowRollapse {
+		headerCols = 1
+	} else {
+		headerCols = getDepth(bm.RowTree)
+	}
+
+	// Preserve all matrix cells in Content
+	bm.Content = make(map[CellIndex]*Cell)
+	for r, row := range matrix {
+		for c, val := range row {
+			bm.Content[CellIndex{Ri: r, Ci: c}] = &Cell{Value: val, Ri: r, Ci: c}
+		}
+	}
+
+	collectedValues := make(map[*PhanTo][]string)
+	seenValues := make(map[*PhanTo]map[string]bool)
+
+	addPhanToValue := func(pt *PhanTo, val string) {
+		if val == "" {
+			return
+		}
+		if len(pt.Children) > 0 {
+			for _, child := range pt.Children {
+				if seenValues[child] == nil {
+					seenValues[child] = make(map[string]bool)
+				}
+				if !seenValues[child][val] {
+					seenValues[child][val] = true
+					collectedValues[child] = append(collectedValues[child], val)
+				}
+			}
+		} else {
+			if seenValues[pt] == nil {
+				seenValues[pt] = make(map[string]bool)
+			}
+			if !seenValues[pt][val] {
+				seenValues[pt][val] = true
+				collectedValues[pt] = append(collectedValues[pt], val)
+			}
+		}
+	}
+
+	findPhanTo := func(ptName string, chiTieuName string) *PhanTo {
+		if chiTieuName != "" {
+			var targetChiTieu *ChiTieu
+			for _, ct := range bm.ChiTieus {
+				if ct.Name == chiTieuName {
+					targetChiTieu = ct
+					break
+				}
+			}
+			if targetChiTieu != nil {
+				for _, pt := range targetChiTieu.PhanTos {
+					if pt.Name == ptName {
+						return pt
+					}
+				}
+			}
+		}
+		for _, pt := range bm.PhanToChungs {
+			if pt.Name == ptName {
+				return pt
+			}
+		}
+		for _, ct := range bm.ChiTieus {
+			for _, pt := range ct.PhanTos {
+				if pt.Name == ptName {
+					return pt
+				}
+			}
+		}
+		return nil
+	}
+
+	// Parse col headers in matrix order
+	if bm.ColCollapse {
+		colLeafSet := makeIntSet(bm.ColLeafs)
+		if len(matrix) > 0 {
+			var curPT *PhanTo
+			var curCT string
+			for c := headerCols; c < len(matrix[0]); c++ {
+				val := matrix[0][c]
+				if ct := findChiTieu(bm, val); ct != "" {
+					curCT, curPT = ct, nil
+					continue
+				}
+				if pt := findPhanTo(val, curCT); pt != nil {
+					curPT = pt
+				} else if curPT != nil && isLeafPhanTo(curPT, colLeafSet) {
+					addPhanToValue(curPT, val)
+				}
+			}
+		}
+	} else {
+		if len(matrix) > 0 {
+			for c := headerCols; c < len(matrix[0]); c++ {
+				var currentChiTieuName string
+				for r := 0; r < headerRows; r++ {
+					val := matrix[r][c]
+					for _, ct := range bm.ChiTieus {
+						if ct.Name == val {
+							currentChiTieuName = val
+							break
+						}
+					}
+				}
+				for r := 0; r < headerRows; {
+					val := matrix[r][c]
+					pt := findPhanTo(val, currentChiTieuName)
+					if pt != nil && r+1 < headerRows {
+						addPhanToValue(pt, matrix[r+1][c])
+						r += 2
+					} else {
+						r++
+					}
+				}
+			}
+		}
+	}
+
+	// Parse row headers in matrix order
+	if bm.RowRollapse {
+		rowLeafSet := makeIntSet(bm.RowLeafs)
+		var curPT *PhanTo
+		var curCT string
+		for r := headerRows; r < len(matrix); r++ {
+			if len(matrix[r]) == 0 {
+				continue
+			}
+			val := matrix[r][0]
+			if ct := findChiTieu(bm, val); ct != "" {
+				curCT, curPT = ct, nil
+				continue
+			}
+			if pt := findPhanTo(val, curCT); pt != nil {
+				curPT = pt
+			} else if curPT != nil && isLeafPhanTo(curPT, rowLeafSet) {
+				addPhanToValue(curPT, val)
+			}
+		}
+	} else {
+		for r := headerRows; r < len(matrix); r++ {
+			var currentChiTieuName string
+			for c := 0; c < headerCols; c++ {
+				val := matrix[r][c]
+				for _, ct := range bm.ChiTieus {
+					if ct.Name == val {
+						currentChiTieuName = val
+						break
+					}
+				}
+			}
+			for c := 0; c < headerCols; {
+				val := matrix[r][c]
+				pt := findPhanTo(val, currentChiTieuName)
+				if pt != nil && c+1 < headerCols {
+					addPhanToValue(pt, matrix[r][c+1])
+					c += 2
+				} else {
+					c++
+				}
+			}
+		}
+	}
+
+	for pt, vals := range collectedValues {
+		pt.Values = vals
+	}
+
+	bm.derived()
+
+	// Restore matrix order for PhanToChungs (derived() sorts alphabetically)
+	for _, ptc := range bm.PhanToChungs {
+		seen := make(map[string]bool)
+		ordered := make([]string, 0)
+		for _, child := range ptc.Children {
+			for _, v := range child.Values {
+				if !seen[v] {
+					seen[v] = true
+					ordered = append(ordered, v)
+				}
+			}
+		}
+		ptc.Values = ordered
+	}
+
+	bm.ColTree = &Node{}
+	bm.genTree(bm.ColTree, bm.Cols)
+	bm.RowTree = &Node{}
+	bm.genTree(bm.RowTree, bm.Rows)
+	bm.ColLeafs = getLeafIdbms(bm.ColTree)
+	bm.RowLeafs = getLeafIdbms(bm.RowTree)
+
+	// Layout trees; since Values follow matrix order, coordinates match matrix positions
+	colOffset := headerCols
+	if bm.ColCollapse {
+		layoutColTreeCollapsed(bm.ColTree, 0, &colOffset)
+	} else {
+		layoutColTree(bm.ColTree, -1, &colOffset)
+	}
+	rowOffset := headerRows
+	if bm.RowRollapse {
+		layoutRowTreeCollapsed(bm.RowTree, 0, &rowOffset)
+	} else {
+		layoutRowTree(bm.RowTree, -1, &rowOffset)
+	}
+
+	// Attach Node refs to existing Content cells (header cells get linked to tree nodes)
+	var attachNodes func(*Node)
+	attachNodes = func(n *Node) {
+		if n.Type != "" {
+			idx := CellIndex{Ri: n.Ri, Ci: n.Ci}
+			if cell, ok := bm.Content[idx]; ok {
+				cell.Node = n
+			}
+		}
+		for _, child := range n.Children {
+			attachNodes(child)
+		}
+	}
+	attachNodes(bm.ColTree)
+	attachNodes(bm.RowTree)
+
+	// Rebuild BangChiTieus by reading data values from Content
+	bm.BangChiTieus = []*BangChiTieu{}
+	bangMap := make(map[string]*BangChiTieu)
+	for _, ct := range bm.ChiTieus {
+		bct := &BangChiTieu{
+			ChiTieuName: ct.Name,
+			DongDuLieus: []*DongDuLieu{},
+		}
+		bm.BangChiTieus = append(bm.BangChiTieus, bct)
+		bangMap[ct.Name] = bct
+	}
+
+	colLeaves := getLeaves(bm.ColTree)
+	rowLeaves := getLeaves(bm.RowTree)
+
+	colPaths := make(map[*Node][]PathNode)
+	collectLeafPaths(bm.ColTree, nil, &colPaths)
+	rowPaths := make(map[*Node][]PathNode)
+	collectLeafPaths(bm.RowTree, nil, &rowPaths)
+
+	numCols := len(colLeaves)
+	if numCols == 0 {
+		numCols = 1
+	}
+	numRows := len(rowLeaves)
+	if numRows == 0 {
+		numRows = 1
+	}
+
+	for r := 0; r < numRows; r++ {
+		var rLeaf *Node
+		var rPath []PathNode
+		if r < len(rowLeaves) {
+			rLeaf = rowLeaves[r]
+			rPath = rowPaths[rLeaf]
+		}
+		ri := headerRows + r
+		if rLeaf != nil {
+			ri = rLeaf.Ri
+		}
+
+		for c := 0; c < numCols; c++ {
+			var cLeaf *Node
+			var cPath []PathNode
+			if c < len(colLeaves) {
+				cLeaf = colLeaves[c]
+				cPath = colPaths[cLeaf]
+			}
+			ci := headerCols + c
+			if cLeaf != nil {
+				ci = cLeaf.Ci
+			}
+
+			chiTieuName, dims := extractFromPaths(bm, cPath, rPath)
+			if chiTieuName == "" {
+				continue
+			}
+			bct := bangMap[chiTieuName]
+			if bct == nil {
+				continue
+			}
+			val := ""
+			if cell, ok := bm.Content[CellIndex{Ri: ri, Ci: ci}]; ok {
+				val = cell.Value
+			}
+			bct.DongDuLieus = append(bct.DongDuLieus, &DongDuLieu{
+				Dims:   dims,
+				Solieu: val,
+			})
+		}
+	}
+}
+
 func (bm *BieuMau) setupFull() {
 	bm.setupBase()
 	bm.genHeaders()

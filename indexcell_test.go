@@ -377,6 +377,134 @@ func TestRowRollapseGenContent(t *testing.T) {
 	}
 }
 
+func TestImportFromMatrix(t *testing.T) {
+	bm := createSampleBieuMau()
+	bm.HeaderType = "matrix_chitieu_in_rows"
+	bm.setupFull()
+
+	// headerRows = getDepth(ColTree) = 2, headerCols = getDepth(RowTree) = 3
+	// Matrix has:
+	// - non-ChiTieu cells at [0][0]="BÁO CÁO", [0][1]="Tháng 1"
+	// - region order: Bắc (col 3), Trung (col 4), Nam (col 5)
+	//   which differs from alphabetical order (Bắc < Nam < Trung)
+	// - total column (col 6): sum of each data row  (360=100+110+150, 290=80+90+120)
+	// - total row    (row 4): sum of each data col  (180=100+80, 200=110+90, 270=150+120)
+	editedMatrix := [][]string{
+		{"BÁO CÁO", "Tháng 1", "", "Vùng miền", "Vùng miền", "Vùng miền", "Tổng"},
+		{"", "", "", "Miền Bắc", "Miền Trung", "Miền Nam", ""},
+		{"Doanh thu", "Hình thức", "Bán lẻ", "100", "110", "150", "360"},
+		{"Chi phí", "Loại CP", "Vận hành", "80", "90", "120", "290"},
+		{"", "", "Tổng", "180", "200", "270", ""},
+	}
+
+	bm.importFromMatrix(editedMatrix)
+
+	// 1. Non-ChiTieu cells (outside ChiTieu structure) must be preserved with no Node ref
+	for _, tc := range []struct {
+		idx  CellIndex
+		want string
+	}{
+		{CellIndex{Ri: 0, Ci: 0}, "BÁO CÁO"},
+		{CellIndex{Ri: 0, Ci: 1}, "Tháng 1"},
+		// total column header
+		{CellIndex{Ri: 0, Ci: 6}, "Tổng"},
+		{CellIndex{Ri: 1, Ci: 6}, ""},
+		// total column values
+		{CellIndex{Ri: 2, Ci: 6}, "360"},
+		{CellIndex{Ri: 3, Ci: 6}, "290"},
+		// total row label
+		{CellIndex{Ri: 4, Ci: 2}, "Tổng"},
+		// total row values
+		{CellIndex{Ri: 4, Ci: 3}, "180"},
+		{CellIndex{Ri: 4, Ci: 4}, "200"},
+		{CellIndex{Ri: 4, Ci: 5}, "270"},
+	} {
+		cell, ok := bm.Content[tc.idx]
+		if !ok {
+			t.Errorf("cell at %+v missing from Content", tc.idx)
+		} else if cell.Value != tc.want {
+			t.Errorf("cell at %+v = %q, want %q", tc.idx, cell.Value, tc.want)
+		} else if cell.Node != nil {
+			t.Errorf("cell at %+v should have no Node (non-ChiTieu), got %+v", tc.idx, cell.Node)
+		}
+	}
+
+	// 2. Tree nodes must be at matrix positions, not alphabetical order
+	// "Miền Trung" is at col 4 in matrix → must be at Ci=4, NOT Ci=5 (alphabetical)
+	// "Miền Nam" is at col 5 in matrix → must be at Ci=5, NOT Ci=4
+	for _, tc := range []struct {
+		idx       CellIndex
+		nodeValue string
+	}{
+		{CellIndex{Ri: 1, Ci: 3}, "Miền Bắc"},
+		{CellIndex{Ri: 1, Ci: 4}, "Miền Trung"},
+		{CellIndex{Ri: 1, Ci: 5}, "Miền Nam"},
+	} {
+		cell, ok := bm.Content[tc.idx]
+		if !ok {
+			t.Errorf("header cell at %+v missing from Content", tc.idx)
+			continue
+		}
+		if cell.Node == nil {
+			t.Errorf("header cell at %+v has no Node", tc.idx)
+			continue
+		}
+		if cell.Node.Value != tc.nodeValue {
+			t.Errorf("header cell at %+v Node.Value = %q, want %q", tc.idx, cell.Node.Value, tc.nodeValue)
+		}
+	}
+
+	// 3. Data cells must be preserved at matrix positions
+	expectedData := map[CellIndex]string{
+		{Ri: 2, Ci: 3}: "100",
+		{Ri: 2, Ci: 4}: "110",
+		{Ri: 2, Ci: 5}: "150",
+		{Ri: 3, Ci: 3}: "80",
+		{Ri: 3, Ci: 4}: "90",
+		{Ri: 3, Ci: 5}: "120",
+	}
+	for idx, want := range expectedData {
+		cell, ok := bm.Content[idx]
+		if !ok {
+			t.Errorf("data cell at %+v not found in Content", idx)
+		} else if cell.Value != want {
+			t.Errorf("data cell at %+v = %q, want %q", idx, cell.Value, want)
+		}
+	}
+
+	// 4. BangChiTieus must reflect data at matrix positions (Trung=110/90, not Nam's values)
+	solieu := func(chiTieuName, vuongMienVal string) string {
+		for _, bct := range bm.BangChiTieus {
+			if bct.ChiTieuName != chiTieuName {
+				continue
+			}
+			for _, ddl := range bct.DongDuLieus {
+				for _, kv := range ddl.Dims {
+					if kv.Key == "Vùng miền" && kv.Value == vuongMienVal {
+						return ddl.Solieu
+					}
+				}
+			}
+		}
+		return ""
+	}
+
+	for _, tc := range []struct {
+		chiTieu, vung, want string
+	}{
+		{"Doanh thu", "Miền Bắc", "100"},
+		{"Doanh thu", "Miền Trung", "110"},
+		{"Doanh thu", "Miền Nam", "150"},
+		{"Chi phí", "Miền Bắc", "80"},
+		{"Chi phí", "Miền Trung", "90"},
+		{"Chi phí", "Miền Nam", "120"},
+	} {
+		if got := solieu(tc.chiTieu, tc.vung); got != tc.want {
+			t.Errorf("BangChiTieu[%s][%s] = %q, want %q", tc.chiTieu, tc.vung, got, tc.want)
+		}
+	}
+}
+
 func TestMatrixChitieuInColsFlow(t *testing.T) {
 	bm := createSampleBieuMau()
 	bm.HeaderType = "matrix_chitieu_in_cols"

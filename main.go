@@ -122,7 +122,7 @@ func main() {
 		{"100", "110", "150", "80", "90", "120", "200"},
 	}
 
-	bm.replaceContent(editedMatrix)
+	bm.importFromMatrix(editedMatrix)
 
 	fmt.Println("=== 3. KẾT QUẢ SAU KHI IMPORT NGƯỢC FLAT ===")
 	printContent(bm)
@@ -150,7 +150,7 @@ func main() {
 		{"Chi phí", "Loại CP", "Bán buôn", "-", "-", "200"},
 	}
 
-	bmMatrix.replaceContent(editedMatrixInRows)
+	bmMatrix.importFromMatrix(editedMatrixInRows)
 
 	fmt.Println("=== 6. KẾT QUẢ SAU KHI IMPORT NGƯỢC MATRIX ===")
 	printContent(bmMatrix)
@@ -171,11 +171,10 @@ func main() {
 		{"Vùng miền", "Miền Nam", "150", "120", "200"},
 	}
 
-	bmMatrixCols.replaceContent(editedMatrixInCols)
+	bmMatrixCols.importFromMatrix(editedMatrixInCols)
 
 	fmt.Println("=== 9. KẾT QUẢ SAU KHI IMPORT NGƯỢC MATRIX (CHỈ TIÊU Ở CỘT) ===")
 	printContent(bmMatrixCols)
-
 
 	fmt.Println("=== 10. KHỞI TẠO BẢNG MATRIX (CHỈ TIÊU Ở DÒNG) + ROWROLLAPSE ===")
 	bmRowCollapse := createSampleBieuMau()
@@ -205,7 +204,7 @@ func main() {
 		{"Vận hành", "80", "90", "120"},
 	}
 
-	bmRowCollapse.replaceContent(editedRowCollapse)
+	bmRowCollapse.importFromMatrix(editedRowCollapse)
 
 	fmt.Println("=== 12. KẾT QUẢ SAU KHI IMPORT NGƯỢC (ROWROLLAPSE) ===")
 	printContent(bmRowCollapse)
