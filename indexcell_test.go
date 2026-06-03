@@ -1,0 +1,316 @@
+package main
+
+import (
+	"reflect"
+	"testing"
+)
+
+func TestUniqArrs(t *testing.T) {
+	tests := []struct {
+		name string
+		arrs [][]string
+		want []string
+	}{
+		{
+			name: "single empty",
+			arrs: [][]string{{}},
+			want: []string{},
+		},
+		{
+			name: "no duplicate, sorted",
+			arrs: [][]string{{"B", "A"}, {"C"}},
+			want: []string{"A", "B", "C"},
+		},
+		{
+			name: "duplicates",
+			arrs: [][]string{{"A", "B", "A"}, {"B", "C"}},
+			want: []string{"A", "B", "C"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := uniqArrs(tt.arrs...)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("uniqArrs() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetDepth(t *testing.T) {
+	// Nil node
+	if got := getDepth(nil); got != 0 {
+		t.Errorf("getDepth(nil) = %d, want 0", got)
+	}
+
+	// Single leaf node (no type)
+	nodeLeafNoType := &Node{}
+	if got := getDepth(nodeLeafNoType); got != 0 {
+		t.Errorf("getDepth(leaf with no type) = %d, want 0", got)
+	}
+
+	// Single leaf node with type
+	nodeLeaf := &Node{Type: "chitieu"}
+	if got := getDepth(nodeLeaf); got != 1 {
+		t.Errorf("getDepth(leaf with type) = %d, want 1", got)
+	}
+
+	// Node with children
+	nodeParent := &Node{
+		Type: "phanto",
+		Children: []*Node{
+			{Type: "phanto_value"},
+		},
+	}
+	if got := getDepth(nodeParent); got != 2 {
+		t.Errorf("getDepth(parent) = %d, want 2", got)
+	}
+}
+
+func TestCopyNode(t *testing.T) {
+	node := &Node{
+		Value: "test",
+		Type:  "chitieu",
+		IDbms: []int{1, 2},
+		Children: []*Node{
+			{Value: "child", Type: "phanto"},
+		},
+	}
+
+	clone := copyNode(node)
+
+	if clone == node {
+		t.Errorf("copyNode() returned same pointer")
+	}
+	if clone.Value != node.Value || clone.Type != node.Type {
+		t.Errorf("copyNode() base properties mismatch: got %+v, want %+v", clone, node)
+	}
+	if !reflect.DeepEqual(clone.IDbms, node.IDbms) {
+		t.Errorf("copyNode() IDbms mismatch")
+	}
+	// Check if slice pointer is different
+	if &clone.IDbms[0] == &node.IDbms[0] {
+		t.Errorf("copyNode() copied IDbms slice pointer instead of content")
+	}
+	if len(clone.Children) != len(node.Children) {
+		t.Errorf("copyNode() children length mismatch")
+	}
+	if clone.Children[0] == node.Children[0] {
+		t.Errorf("copyNode() copied child pointer instead of cloning")
+	}
+}
+
+func TestFlatTableFlow(t *testing.T) {
+	bm := createSampleBieuMau()
+	bm.HeaderType = "flat"
+	bm.setupFull()
+
+	// 1. Verify initial layout properties
+	// depth of ColTree (headerRows) = 5
+	// depth of RowTree (headerCols) = 0
+	if got := getDepth(bm.ColTree); got != 5 {
+		t.Errorf("Expected ColTree depth 5, got %d", got)
+	}
+	if got := getDepth(bm.RowTree); got != 0 {
+		t.Errorf("Expected RowTree depth 0, got %d", got)
+	}
+
+	// 2. Verify initial data cell values in Content
+	// Col 0: Bắc, Doanh thu, Bán lẻ -> 100
+	// Col 1: Bắc, Chi phí, Vận hành -> 80
+	// Col 2: Nam, Doanh thu, Bán lẻ -> 150
+	// Col 3: Nam, Chi phí, Vận hành -> 120
+	expectedInitial := map[CellIndex]string{
+		{Ri: 5, Ci: 0}: "100",
+		{Ri: 5, Ci: 1}: "80",
+		{Ri: 5, Ci: 2}: "150",
+		{Ri: 5, Ci: 3}: "120",
+	}
+
+	for idx, val := range expectedInitial {
+		cell, exists := bm.Content[idx]
+		if !exists {
+			t.Errorf("Cell at %+v not found in Content", idx)
+		} else if cell.Value != val {
+			t.Errorf("Cell at %+v value = %q, want %q", idx, cell.Value, val)
+		}
+	}
+
+	// 3. Edit and Import
+	editedMatrix := [][]string{
+		{"Vùng miền", "Vùng miền", "Vùng miền", "Vùng miền", "Vùng miền", "Vùng miền", "Vùng miền"},
+		{"Miền Bắc", "Miền Trung", "Miền Nam", "Miền Bắc", "Miền Trung", "Miền Nam", "Miền Nam"},
+		{"Doanh thu", "Doanh thu", "Doanh thu", "Chi phí", "Chi phí", "Chi phí", "Chi phí"},
+		{"Hình thức", "Hình thức", "Hình thức", "Loại CP", "Loại CP", "Loại CP", "Loại CP"},
+		{"Bán lẻ", "Bán lẻ", "Bán lẻ", "Vận hành", "Vận hành", "Vận hành", "Bán buôn"},
+		{"100", "110", "150", "80", "90", "120", "200"},
+	}
+
+	bm.replaceContent(editedMatrix)
+
+	// After replacement, ColTree depth remains 5, but there are 9 leaf columns:
+	// Bắc (Doanh thu Bán lẻ, Chi phí Vận hành, Chi phí Bán buôn) -> cols 0, 1, 2
+	// Nam (Doanh thu Bán lẻ, Chi phí Vận hành, Chi phí Bán buôn) -> cols 3, 4, 5
+	// Trung (Doanh thu Bán lẻ, Chi phí Vận hành, Chi phí Bán buôn) -> cols 6, 7, 8
+	expectedImported := map[CellIndex]string{
+		{Ri: 5, Ci: 0}: "100", // Bắc, Doanh thu, Bán lẻ
+		{Ri: 5, Ci: 1}: "80",  // Bắc, Chi phí, Vận hành
+		{Ri: 5, Ci: 2}: "",    // Bắc, Chi phí, Bán buôn (empty)
+		{Ri: 5, Ci: 3}: "150", // Nam, Doanh thu, Bán lẻ
+		{Ri: 5, Ci: 4}: "120", // Nam, Chi phí, Vận hành
+		{Ri: 5, Ci: 5}: "200", // Nam, Chi phí, Bán buôn
+		{Ri: 5, Ci: 6}: "110", // Trung, Doanh thu, Bán lẻ
+		{Ri: 5, Ci: 7}: "90",  // Trung, Chi phí, Vận hành
+		{Ri: 5, Ci: 8}: "",    // Trung, Chi phí, Bán buôn (empty)
+	}
+
+	for idx, val := range expectedImported {
+		cell, exists := bm.Content[idx]
+		if !exists {
+			t.Errorf("Imported Cell at %+v not found in Content", idx)
+		} else if cell.Value != val {
+			t.Errorf("Imported Cell at %+v value = %q, want %q", idx, cell.Value, val)
+		}
+	}
+}
+
+func TestMatrixChitieuInRowsFlow(t *testing.T) {
+	bm := createSampleBieuMau()
+	bm.HeaderType = "matrix_chitieu_in_rows"
+	bm.setupFull()
+
+	// 1. Verify layout properties
+	// depth of ColTree (headerRows) = 2
+	// depth of RowTree (headerCols) = 3
+	if got := getDepth(bm.ColTree); got != 2 {
+		t.Errorf("Expected ColTree depth 2, got %d", got)
+	}
+	if got := getDepth(bm.RowTree); got != 3 {
+		t.Errorf("Expected RowTree depth 3, got %d", got)
+	}
+
+	// 2. Verify initial data cell values in Content
+	// Rows (headerCols = 3): Doanh thu/Hình thức/Bán lẻ -> Ri = 2, Chi phí/Loại CP/Vận hành -> Ri = 3
+	// Cols (headerRows = 2): Miền Bắc -> Ci = 3, Miền Nam -> Ci = 4
+	expectedInitial := map[CellIndex]string{
+		{Ri: 2, Ci: 3}: "100", // Doanh thu, Bán lẻ & Miền Bắc
+		{Ri: 2, Ci: 4}: "150", // Doanh thu, Bán lẻ & Miền Nam
+		{Ri: 3, Ci: 3}: "80",  // Chi phí, Vận hành & Miền Bắc
+		{Ri: 3, Ci: 4}: "120", // Chi phí, Vận hành & Miền Nam
+	}
+
+	for idx, val := range expectedInitial {
+		cell, exists := bm.Content[idx]
+		if !exists {
+			t.Errorf("Cell at %+v not found in Content", idx)
+		} else if cell.Value != val {
+			t.Errorf("Cell at %+v value = %q, want %q", idx, cell.Value, val)
+		}
+	}
+
+	// 3. Edit and Import
+	editedMatrix := [][]string{
+		{"-", "-", "-", "Vùng miền", "Vùng miền", "Vùng miền"},
+		{"-", "-", "-", "Miền Bắc", "Miền Trung", "Miền Nam"},
+		{"Doanh thu", "Hình thức", "Bán lẻ", "100", "110", "150"},
+		{"Chi phí", "Loại CP", "Vận hành", "80", "90", "120"},
+		{"Chi phí", "Loại CP", "Bán buôn", "-", "-", "200"},
+	}
+
+	bm.replaceContent(editedMatrix)
+
+	// After replacement, ColTree depth = 2 (leaves: Bắc [col 3], Nam [col 4], Trung [col 5])
+	// RowTree depth = 3 (leaves: Doanh thu Bán lẻ [row 2], Chi phí Vận hành [row 3], Chi phí Bán buôn [row 4])
+	expectedImported := map[CellIndex]string{
+		{Ri: 2, Ci: 3}: "100", // Doanh thu, Bán lẻ & Miền Bắc
+		{Ri: 2, Ci: 4}: "150", // Doanh thu, Bán lẻ & Miền Nam
+		{Ri: 2, Ci: 5}: "110", // Doanh thu, Bán lẻ & Miền Trung
+		{Ri: 3, Ci: 3}: "80",  // Chi phí, Vận hành & Miền Bắc
+		{Ri: 3, Ci: 4}: "120", // Chi phí, Vận hành & Miền Nam
+		{Ri: 3, Ci: 5}: "90",  // Chi phí, Vận hành & Miền Trung
+		{Ri: 4, Ci: 3}: "-",   // Chi phí, Bán buôn & Miền Bắc (empty)
+		{Ri: 4, Ci: 4}: "200", // Chi phí, Bán buôn & Miền Nam
+		{Ri: 4, Ci: 5}: "-",   // Chi phí, Bán buôn & Miền Trung (empty)
+	}
+
+	for idx, val := range expectedImported {
+		cell, exists := bm.Content[idx]
+		if !exists {
+			t.Errorf("Imported Cell at %+v not found in Content", idx)
+		} else if cell.Value != val {
+			t.Errorf("Imported Cell at %+v value = %q, want %q", idx, cell.Value, val)
+		}
+	}
+}
+
+func TestMatrixChitieuInColsFlow(t *testing.T) {
+	bm := createSampleBieuMau()
+	bm.HeaderType = "matrix_chitieu_in_cols"
+	bm.setupFull()
+
+	// 1. Verify layout properties
+	// depth of ColTree (headerRows) = 3
+	// depth of RowTree (headerCols) = 2
+	if got := getDepth(bm.ColTree); got != 3 {
+		t.Errorf("Expected ColTree depth 3, got %d", got)
+	}
+	if got := getDepth(bm.RowTree); got != 2 {
+		t.Errorf("Expected RowTree depth 2, got %d", got)
+	}
+
+	// 2. Verify initial data cell values in Content
+	// Rows (headerCols = 2): Miền Bắc -> Ri = 3, Miền Nam -> Ri = 4
+	// Cols (headerRows = 3): Doanh thu/Hình thức/Bán lẻ -> Ci = 2, Chi phí/Loại CP/Vận hành -> Ci = 3
+	expectedInitial := map[CellIndex]string{
+		{Ri: 3, Ci: 2}: "100", // Miền Bắc & Doanh thu, Bán lẻ
+		{Ri: 3, Ci: 3}: "80",  // Miền Bắc & Chi phí, Vận hành
+		{Ri: 4, Ci: 2}: "150", // Miền Nam & Doanh thu, Bán lẻ
+		{Ri: 4, Ci: 3}: "120", // Miền Nam & Chi phí, Vận hành
+	}
+
+	for idx, val := range expectedInitial {
+		cell, exists := bm.Content[idx]
+		if !exists {
+			t.Errorf("Cell at %+v not found in Content", idx)
+		} else if cell.Value != val {
+			t.Errorf("Cell at %+v value = %q, want %q", idx, cell.Value, val)
+		}
+	}
+
+	// 3. Edit and Import
+	editedMatrix := [][]string{
+		{"-", "-", "Doanh thu", "Chi phí", "Chi phí"},
+		{"-", "-", "Hình thức", "Loại CP", "Loại CP"},
+		{"-", "-", "Bán lẻ", "Vận hành", "Bán buôn"},
+		{"Vùng miền", "Miền Bắc", "100", "80", "-"},
+		{"Vùng miền", "Miền Trung", "110", "90", "-"},
+		{"Vùng miền", "Miền Nam", "150", "120", "200"},
+	}
+
+	bm.replaceContent(editedMatrix)
+
+	// After replacement:
+	// ColTree depth = 3 (leaves: Doanh thu Bán lẻ [col 2], Chi phí Vận hành [col 3], Chi phí Bán buôn [col 4])
+	// RowTree depth = 2 (leaves: Bắc [row 3], Nam [row 4], Trung [row 5])
+	expectedImported := map[CellIndex]string{
+		{Ri: 3, Ci: 2}: "100", // Miền Bắc & Doanh thu, Bán lẻ
+		{Ri: 3, Ci: 3}: "80",  // Miền Bắc & Chi phí, Vận hành
+		{Ri: 3, Ci: 4}: "-",   // Miền Bắc & Chi phí, Bán buôn (empty)
+		{Ri: 4, Ci: 2}: "150", // Miền Nam & Doanh thu, Bán lẻ
+		{Ri: 4, Ci: 3}: "120", // Miền Nam & Chi phí, Vận hành
+		{Ri: 4, Ci: 4}: "200", // Miền Nam & Chi phí, Bán buôn
+		{Ri: 5, Ci: 2}: "110", // Miền Trung & Doanh thu, Bán lẻ
+		{Ri: 5, Ci: 3}: "90",  // Miền Trung & Chi phí, Vận hành
+		{Ri: 5, Ci: 4}: "-",   // Miền Trung & Chi phí, Bán buôn (empty)
+	}
+
+	for idx, val := range expectedImported {
+		cell, exists := bm.Content[idx]
+		if !exists {
+			t.Errorf("Imported Cell at %+v not found in Content", idx)
+		} else if cell.Value != val {
+			t.Errorf("Imported Cell at %+v value = %q, want %q", idx, cell.Value, val)
+		}
+	}
+}
