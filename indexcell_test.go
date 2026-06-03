@@ -72,7 +72,7 @@ func TestCopyNode(t *testing.T) {
 	node := &Node{
 		Value: "test",
 		Type:  "chitieu",
-		IDbms: []int{1, 2},
+		IDbm:  1,
 		Children: []*Node{
 			{Value: "child", Type: "phanto"},
 		},
@@ -86,12 +86,8 @@ func TestCopyNode(t *testing.T) {
 	if clone.Value != node.Value || clone.Type != node.Type {
 		t.Errorf("copyNode() base properties mismatch: got %+v, want %+v", clone, node)
 	}
-	if !reflect.DeepEqual(clone.IDbms, node.IDbms) {
-		t.Errorf("copyNode() IDbms mismatch")
-	}
-	// Check if slice pointer is different
-	if &clone.IDbms[0] == &node.IDbms[0] {
-		t.Errorf("copyNode() copied IDbms slice pointer instead of content")
+	if clone.IDbm != node.IDbm {
+		t.Errorf("copyNode() IDbm mismatch: got %d, want %d", clone.IDbm, node.IDbm)
 	}
 	if len(clone.Children) != len(node.Children) {
 		t.Errorf("copyNode() children length mismatch")

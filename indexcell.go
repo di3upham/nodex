@@ -47,8 +47,8 @@ type Node struct {
 	Ci    int
 	Ri    int
 
-	IDbms []int  // chi tieu and phan to
-	Type  string // chitieu, phanto, phanto_value
+	IDbm int    // chi tieu and phan to idbm
+	Type string // chitieu, phanto, phanto_value
 }
 
 type BieuMau struct {
@@ -328,7 +328,7 @@ func (bm *BieuMau) genTree(node *Node, idbms []int) {
 	chitieuNodem := make(map[int]*Node) // branch node
 	for _, idbm := range chiTieuIdbms {
 		chiTieuNode := &Node{
-			IDbms: []int{idbm},
+			IDbm:  idbm,
 			Type:  "chitieu",
 			Value: bm.chiTieum[idbm].Name,
 		}
@@ -371,12 +371,11 @@ func (bm *BieuMau) genTree(node *Node, idbms []int) {
 // TODO don't use recursive
 func copyNode(node *Node) *Node {
 	clone := &Node{
-		IDbms:    make([]int, len(node.IDbms)),
+		IDbm:     node.IDbm,
 		Value:    node.Value,
 		Type:     node.Type,
 		Children: make([]*Node, len(node.Children)),
 	}
-	copy(clone.IDbms, node.IDbms)
 	for i := range clone.Children {
 		clone.Children[i] = copyNode(node.Children[i])
 	}
@@ -396,14 +395,14 @@ func (bm *BieuMau) recursiveNode(node *Node, idbms []int) {
 	}
 
 	phanToNode := &Node{
-		IDbms: []int{idbm},
-		Type:  "phanto",
+		IDbm: idbm,
+		Type: "phanto",
 	}
 
 	for _, value := range phanTo.Values {
 		valueNode := &Node{
 			Value: value,
-			IDbms: []int{idbm},
+			IDbm:  idbm,
 			Type:  "phanto_value",
 		}
 		bm.recursiveNode(valueNode, idbms[1:])
@@ -502,8 +501,8 @@ func getLeafIdbms(node *Node) []int {
 	var idbms []int
 	seen := make(map[int]bool)
 	for _, leaf := range leaves {
-		if len(leaf.IDbms) > 0 {
-			id := leaf.IDbms[0]
+		if leaf.IDbm != 0 {
+			id := leaf.IDbm
 			if !seen[id] {
 				seen[id] = true
 				idbms = append(idbms, id)
@@ -561,13 +560,9 @@ func collectLeafPaths(node *Node, currentPath []PathNode, paths *map[*Node][]Pat
 	}
 	newPath := currentPath
 	if node.Type != "" {
-		idbm := 0
-		if len(node.IDbms) > 0 {
-			idbm = node.IDbms[0]
-		}
 		newPath = append(currentPath, PathNode{
 			Type:  node.Type,
-			IDbm:  idbm,
+			IDbm:  node.IDbm,
 			Value: node.Value,
 		})
 	}
@@ -743,11 +738,11 @@ func (bm *BieuMau) genContent() {
 			var val string
 			switch n.Type {
 			case "chitieu":
-				if ct, ok := bm.chiTieum[n.IDbms[0]]; ok {
+				if ct, ok := bm.chiTieum[n.IDbm]; ok {
 					val = ct.Name
 				}
 			case "phanto":
-				if pt, ok := bm.phanTom[n.IDbms[0]]; ok {
+				if pt, ok := bm.phanTom[n.IDbm]; ok {
 					val = pt.Name
 				}
 			case "phanto_value":
