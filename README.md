@@ -4,7 +4,7 @@
 
 ---
 
-## 🚀 Key Features
+## Key Features
 
 - **Hierarchical Tree Headers (`ColTree` & `RowTree`)**: Automatically aggregates shared analysis dimensions (dimensions appearing in all metrics) and manages custom/specific breakdowns per metric.
 - **Multiple Layout Types (`HeaderType`)**:
@@ -19,7 +19,7 @@
 
 ---
 
-## 🛠️ Core Data Structures
+## Core Data Structures
 
 All key structs are defined in [indexcell.go](file:///Users/di3upham/workspace/indexcell/indexcell.go):
 
@@ -32,7 +32,7 @@ All key structs are defined in [indexcell.go](file:///Users/di3upham/workspace/i
 
 ---
 
-## 📦 Getting Started
+## Getting Started
 
 ### 1. Generating a Layout
 Here is an example of creating a model and rendering it using a `flat` layout:
@@ -90,7 +90,7 @@ bm.importFromMatrix(editedMatrix)
 
 ---
 
-## 🏃 Running Demo & Tests
+## Running Demo & Tests
 
 To execute the demo:
 ```bash
