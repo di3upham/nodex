@@ -48,7 +48,7 @@ type Node struct {
 	Ri    int
 
 	IDbm int    // chi tieu and phan to idbm
-	Type string // chitieu, phanto, phanto_value
+	Type string // chitieu, phanto, phanto_value, or "" for root
 }
 
 type BieuMau struct {
