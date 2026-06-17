@@ -575,3 +575,271 @@ func TestMatrixChitieuInColsFlow(t *testing.T) {
 		}
 	}
 }
+
+// ─── findTableOrigin tests ───────────────────────────────────────────────────
+
+// TestFindTableOriginShifted verifies origin detection when the table is
+// shifted 2 rows down and 1 col right by free content.
+func TestFindTableOriginShifted(t *testing.T) {
+	bm := createSampleBieuMau()
+	bm.HeaderType = "matrix_chitieu_in_rows"
+	bm.setupFull()
+	// colHeaderDepth=2, rowHeaderDepth=3
+	// colAnchors={"Vùng miền"}, rowAnchors={"Doanh thu","Chi phí"}
+
+	matrix := [][]string{
+		{"TIÊU ĐỀ BÁO CÁO", "", "", "", "", ""},
+		{"", "", "", "", "", ""},
+		{"", "", "", "", "Vùng miền", "Vùng miền"},
+		{"", "", "", "", "Miền Bắc", "Miền Nam"},
+		{"", "Doanh thu", "Hình thức", "Bán lẻ", "100", "150"},
+		{"", "Chi phí", "Loại CP", "Vận hành", "80", "120"},
+	}
+
+	originR, originC, err := bm.findTableOrigin(matrix)
+	if err != nil {
+		t.Fatalf("findTableOrigin() error = %v", err)
+	}
+	if originR != 2 || originC != 1 {
+		t.Errorf("findTableOrigin() = (%d, %d), want (2, 1)", originR, originC)
+	}
+}
+
+// TestFindTableOriginDiagonal verifies detection when shifted diagonally (3 down, 2 right).
+func TestFindTableOriginDiagonal(t *testing.T) {
+	bm := createSampleBieuMau()
+	bm.HeaderType = "matrix_chitieu_in_rows"
+	bm.setupFull()
+
+	matrix := [][]string{
+		{"Tài liệu nội bộ", "", "", "", "", "", "", ""},
+		{"", "Đơn vị: triệu đồng", "", "", "", "", "", ""},
+		{"", "", "", "", "", "", "", ""},
+		{"", "", "", "", "", "Vùng miền", "Vùng miền", ""},
+		{"", "", "", "", "", "Miền Bắc", "Miền Nam", ""},
+		{"", "", "Doanh thu", "Hình thức", "Bán lẻ", "100", "150", ""},
+		{"", "", "Chi phí", "Loại CP", "Vận hành", "80", "120", ""},
+	}
+
+	originR, originC, err := bm.findTableOrigin(matrix)
+	if err != nil {
+		t.Fatalf("findTableOrigin() error = %v", err)
+	}
+	if originR != 3 || originC != 2 {
+		t.Errorf("findTableOrigin() = (%d, %d), want (3, 2)", originR, originC)
+	}
+}
+
+// TestFindTableOriginNoAnchors verifies an error is returned when the matrix
+// contains no known structural names.
+func TestFindTableOriginNoAnchors(t *testing.T) {
+	bm := createSampleBieuMau()
+	bm.HeaderType = "matrix_chitieu_in_rows"
+	bm.setupFull()
+
+	matrix := [][]string{
+		{"100", "200", "300"},
+		{"400", "500", "600"},
+	}
+
+	_, _, err := bm.findTableOrigin(matrix)
+	if err == nil {
+		t.Error("findTableOrigin() expected error for matrix with no anchors, got nil")
+	}
+}
+
+// ─── findFreeRowsCols tests ──────────────────────────────────────────────────
+
+// TestFindFreeColsTotalCol verifies that a "Tổng" column appended after the
+// structured columns is detected as a free column (absolute index 5).
+func TestFindFreeColsTotalCol(t *testing.T) {
+	bm := createSampleBieuMau()
+	bm.HeaderType = "matrix_chitieu_in_rows"
+	bm.setupFull()
+	// colAnchors={"Vùng miền"}, colHeaderDepth=2, rowHeaderDepth=3
+
+	matrix := [][]string{
+		{"", "", "", "Vùng miền", "Vùng miền", "Tổng"},
+		{"", "", "", "Miền Bắc", "Miền Nam", ""},
+		{"Doanh thu", "Hình thức", "Bán lẻ", "100", "150", "250"},
+		{"Chi phí", "Loại CP", "Vận hành", "80", "120", "200"},
+	}
+
+	freeRows, freeCols := bm.findFreeRowsCols(matrix, 0, 0)
+	if len(freeRows) != 0 {
+		t.Errorf("freeRows = %v, want []", freeRows)
+	}
+	if len(freeCols) != 1 || freeCols[0] != 5 {
+		t.Errorf("freeCols = %v, want [5]", freeCols)
+	}
+}
+
+// TestFindFreeRowsTotalRow verifies that a "Tổng cộng" row inserted between
+// structural rows is detected as a free row (absolute index 3).
+func TestFindFreeRowsTotalRow(t *testing.T) {
+	bm := createSampleBieuMau()
+	bm.HeaderType = "matrix_chitieu_in_rows"
+	bm.setupFull()
+	// rowAnchors={"Doanh thu","Chi phí"}, colHeaderDepth=2
+
+	matrix := [][]string{
+		{"", "", "", "Vùng miền", "Vùng miền"},
+		{"", "", "", "Miền Bắc", "Miền Nam"},
+		{"Doanh thu", "Hình thức", "Bán lẻ", "100", "150"},
+		{"Tổng cộng", "", "", "180", "270"},
+		{"Chi phí", "Loại CP", "Vận hành", "80", "120"},
+	}
+
+	freeRows, freeCols := bm.findFreeRowsCols(matrix, 0, 0)
+	if len(freeCols) != 0 {
+		t.Errorf("freeCols = %v, want []", freeCols)
+	}
+	if len(freeRows) != 1 || freeRows[0] != 3 {
+		t.Errorf("freeRows = %v, want [3]", freeRows)
+	}
+}
+
+// TestFindFreeRowsCols_StrictValues verifies that with StrictValues=true, a
+// PhanTo value absent from the predefined list is treated as a free column.
+func TestFindFreeRowsCols_StrictValues(t *testing.T) {
+	bm := createSampleBieuMau()
+	bm.HeaderType = "matrix_chitieu_in_rows"
+	bm.setupFull()
+	// PhanToChungs["Vùng miền"].Values = ["Miền Bắc","Miền Nam"] after setup.
+	for _, ptc := range bm.PhanToChungs {
+		if ptc.Name == "Vùng miền" {
+			ptc.StrictValues = true
+		}
+	}
+
+	// Col 5: "Miền Trung" ∉ Values → free.
+	matrix := [][]string{
+		{"", "", "", "Vùng miền", "Vùng miền", "Vùng miền"},
+		{"", "", "", "Miền Bắc", "Miền Nam", "Miền Trung"},
+		{"Doanh thu", "Hình thức", "Bán lẻ", "100", "150", "110"},
+		{"Chi phí", "Loại CP", "Vận hành", "80", "120", "90"},
+	}
+
+	freeRows, freeCols := bm.findFreeRowsCols(matrix, 0, 0)
+	if len(freeRows) != 0 {
+		t.Errorf("freeRows = %v, want []", freeRows)
+	}
+	if len(freeCols) != 1 || freeCols[0] != 5 {
+		t.Errorf("freeCols = %v, want [5]", freeCols)
+	}
+}
+
+// ─── extractSubMatrix tests ──────────────────────────────────────────────────
+
+func TestExtractSubMatrix(t *testing.T) {
+	matrix := [][]string{
+		{"A", "B", "C", "D", "E"},
+		{"F", "G", "H", "I", "J"},
+		{"K", "L", "M", "N", "O"},
+		{"P", "Q", "R", "S", "T"},
+	}
+
+	// From (1,1), skip abs-row 3 and abs-col 3.
+	got, err := extractSubMatrix(matrix, 1, 1, []int{3}, []int{3})
+	if err != nil {
+		t.Fatalf("extractSubMatrix() error = %v", err)
+	}
+	want := [][]string{
+		{"G", "H", "J"},
+		{"L", "M", "O"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("extractSubMatrix() = %v, want %v", got, want)
+	}
+}
+
+func TestExtractSubMatrixNoFree(t *testing.T) {
+	matrix := [][]string{{"1", "2"}, {"3", "4"}}
+	got, err := extractSubMatrix(matrix, 0, 0, nil, nil)
+	if err != nil {
+		t.Fatalf("extractSubMatrix() error = %v", err)
+	}
+	if !reflect.DeepEqual(got, matrix) {
+		t.Errorf("extractSubMatrix() = %v, want %v", got, matrix)
+	}
+}
+
+// ─── importFromMatrixAuto integration test ───────────────────────────────────
+
+// TestImportFromMatrixAutoFull tests the complete auto-import pipeline:
+// the raw matrix has 2 extra header rows, 1 extra header col, an appended
+// free "Tổng" column, and an inserted free "Tổng cộng" row. The resulting
+// BangChiTieus must match a reference import from the clean sub-matrix.
+func TestImportFromMatrixAutoFull(t *testing.T) {
+	// Reference: import from the clean matrix directly.
+	ref := createSampleBieuMau()
+	ref.HeaderType = "matrix_chitieu_in_rows"
+	ref.setupFull()
+	ref.importFromMatrix([][]string{
+		{"", "", "", "Vùng miền", "Vùng miền"},
+		{"", "", "", "Miền Bắc", "Miền Nam"},
+		{"Doanh thu", "Hình thức", "Bán lẻ", "100", "150"},
+		{"Chi phí", "Loại CP", "Vận hành", "80", "120"},
+	})
+
+	// Auto-import from the raw shifted+polluted matrix.
+	bm := createSampleBieuMau()
+	bm.HeaderType = "matrix_chitieu_in_rows"
+	bm.setupFull()
+
+	// Table starts at abs (2,1); abs-col 6 is the "Tổng" free col;
+	// abs-row 5 is the "Tổng cộng" free row.
+	rawMatrix := [][]string{
+		{"TIÊU ĐỀ", "", "", "", "", "", ""},
+		{"", "", "", "", "", "", ""},
+		{"", "", "", "", "Vùng miền", "Vùng miền", "Tổng"},
+		{"", "", "", "", "Miền Bắc", "Miền Nam", ""},
+		{"", "Doanh thu", "Hình thức", "Bán lẻ", "100", "150", "250"},
+		{"", "Tổng cộng", "", "", "180", "270", "450"},
+		{"", "Chi phí", "Loại CP", "Vận hành", "80", "120", "200"},
+	}
+
+	if err := bm.importFromMatrixAuto(rawMatrix); err != nil {
+		t.Fatalf("importFromMatrixAuto() error = %v", err)
+	}
+
+	if len(bm.BangChiTieus) != len(ref.BangChiTieus) {
+		t.Fatalf("len(BangChiTieus) = %d, want %d", len(bm.BangChiTieus), len(ref.BangChiTieus))
+	}
+
+	type dimKey struct{ vung, phanToVal string }
+	extractSolieu := func(bcts []*BangChiTieu) map[string]map[dimKey]string {
+		res := make(map[string]map[dimKey]string)
+		for _, bct := range bcts {
+			m := make(map[dimKey]string)
+			for _, ddl := range bct.DongDuLieus {
+				var vung, pt string
+				for _, kv := range ddl.Dims {
+					if kv.Key == "Vùng miền" {
+						vung = kv.Value
+					} else {
+						pt = kv.Value
+					}
+				}
+				m[dimKey{vung, pt}] = ddl.Solieu
+			}
+			res[bct.ChiTieuName] = m
+		}
+		return res
+	}
+
+	gotSL := extractSolieu(bm.BangChiTieus)
+	wantSL := extractSolieu(ref.BangChiTieus)
+	for ctName, wantM := range wantSL {
+		gotM, ok := gotSL[ctName]
+		if !ok {
+			t.Errorf("BangChiTieu %q missing", ctName)
+			continue
+		}
+		for dk, wantVal := range wantM {
+			if gotM[dk] != wantVal {
+				t.Errorf("BangChiTieu[%s][%+v] = %q, want %q", ctName, dk, gotM[dk], wantVal)
+			}
+		}
+	}
+}

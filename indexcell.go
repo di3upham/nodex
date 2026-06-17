@@ -1,6 +1,9 @@
 package main
 
-import "slices"
+import (
+	"errors"
+	"slices"
+)
 
 type ChiTieu struct {
 	Name    string
@@ -11,8 +14,9 @@ type ChiTieu struct {
 }
 
 type PhanTo struct {
-	Name   string // uniq in ChiTieu
-	Values []string
+	Name         string // uniq in ChiTieu
+	Values       []string
+	StrictValues bool // if true, unknown values during import are treated as free rows/cols
 
 	// only in bieu mau
 	ChiTieuIDbm int
@@ -1479,4 +1483,334 @@ func (bm *BieuMau) reset() {
 	bm.Rows = nil
 	bm.RowTree = nil
 	bm.Content = nil
+}
+
+// colAnchorNames returns the display names of direct children of ColTree root.
+func (bm *BieuMau) colAnchorNames() map[string]bool {
+	anchors := make(map[string]bool)
+	if bm.ColTree == nil {
+		return anchors
+	}
+	for _, child := range bm.ColTree.Children {
+		switch child.Type {
+		case "phanto":
+			if pt, ok := bm.phanTom[child.IDbm]; ok {
+				anchors[pt.Name] = true
+			}
+		case "chitieu":
+			if ct, ok := bm.chiTieum[child.IDbm]; ok {
+				anchors[ct.Name] = true
+			}
+		}
+	}
+	return anchors
+}
+
+// rowAnchorNames returns the display names of direct children of RowTree root.
+func (bm *BieuMau) rowAnchorNames() map[string]bool {
+	anchors := make(map[string]bool)
+	if bm.RowTree == nil {
+		return anchors
+	}
+	for _, child := range bm.RowTree.Children {
+		switch child.Type {
+		case "phanto":
+			if pt, ok := bm.phanTom[child.IDbm]; ok {
+				anchors[pt.Name] = true
+			}
+		case "chitieu":
+			if ct, ok := bm.chiTieum[child.IDbm]; ok {
+				anchors[ct.Name] = true
+			}
+		}
+	}
+	return anchors
+}
+
+// headerDepths returns the number of header rows (for cols) and header cols (for rows).
+func (bm *BieuMau) headerDepths() (colHeaderDepth, rowHeaderDepth int) {
+	if bm.ColCollapse {
+		colHeaderDepth = 1
+	} else {
+		colHeaderDepth = getDepth(bm.ColTree)
+	}
+	if bm.RowRollapse {
+		rowHeaderDepth = 1
+	} else {
+		rowHeaderDepth = getDepth(bm.RowTree)
+	}
+	return
+}
+
+// findTableOrigin scans the matrix and returns the top-left corner (originR, originC)
+// of the actual data table. It uses known ChiTieu/PhanTo names as structural anchors.
+// Precondition: setupFull() must have been called so ColTree/RowTree and phanTom/chiTieum are initialised.
+func (bm *BieuMau) findTableOrigin(matrix [][]string) (originR, originC int, err error) {
+	if len(matrix) == 0 {
+		return 0, 0, errors.New("matrix rỗng")
+	}
+
+	colHeaderDepth, rowHeaderDepth := bm.headerDepths()
+	colAnchors := bm.colAnchorNames()
+	rowAnchors := bm.rowAnchorNames()
+
+	if len(colAnchors) == 0 && len(rowAnchors) == 0 {
+		return 0, 0, errors.New("BieuMau không có cấu trúc ColTree/RowTree để làm neo phát hiện")
+	}
+
+	// candidateScore tracks score for each candidate origin.
+	type key struct{ r, c int }
+	candidates := make(map[key]int)
+
+	for r, row := range matrix {
+		for c, cell := range row {
+			if cell == "" {
+				continue
+			}
+			if colAnchors[cell] {
+				// col anchors appear at row=originR, col >= originC+rowHeaderDepth
+				oR := r
+				oC := c - rowHeaderDepth
+				if oR >= 0 && oC >= 0 {
+					candidates[key{oR, oC}]++
+				}
+			}
+			if rowAnchors[cell] {
+				// row anchors appear at col=originC, row >= originR+colHeaderDepth
+				oR := r - colHeaderDepth
+				oC := c
+				if oR >= 0 && oC >= 0 {
+					candidates[key{oR, oC}]++
+				}
+			}
+		}
+	}
+
+	if len(candidates) == 0 {
+		return 0, 0, errors.New("không tìm thấy cấu trúc bảng trong matrix")
+	}
+
+	// Score each candidate: count how many anchors appear at expected positions.
+	score := func(oR, oC int) int {
+		s := 0
+		// Check col anchors in row oR at cols >= oC+rowHeaderDepth
+		if oR < len(matrix) {
+			for c := oC + rowHeaderDepth; c < len(matrix[oR]); c++ {
+				if colAnchors[matrix[oR][c]] {
+					s++
+				}
+			}
+		}
+		// Check row anchors in col oC at rows >= oR+colHeaderDepth
+		for r := oR + colHeaderDepth; r < len(matrix); r++ {
+			if oC < len(matrix[r]) && rowAnchors[matrix[r][oC]] {
+				s++
+			}
+		}
+		return s
+	}
+
+	bestScore := -1
+	bestR, bestC := 0, 0
+	for k := range candidates {
+		s := score(k.r, k.c)
+		if s > bestScore || (s == bestScore && (k.r < bestR || (k.r == bestR && k.c < bestC))) {
+			bestScore = s
+			bestR, bestC = k.r, k.c
+		}
+	}
+
+	if bestScore <= 0 {
+		// Fall back to any candidate with non-negative coords.
+		for k := range candidates {
+			if k.r >= 0 && k.c >= 0 {
+				return k.r, k.c, nil
+			}
+		}
+		return 0, 0, errors.New("không tìm thấy cấu trúc bảng trong matrix")
+	}
+
+	return bestR, bestC, nil
+}
+
+// findFreeRowsCols returns the absolute indices (into the raw matrix) of rows and columns
+// that are not part of the structural table (e.g. inserted totals, label columns).
+// originR and originC are the top-left corner of the actual table as returned by findTableOrigin.
+func (bm *BieuMau) findFreeRowsCols(matrix [][]string, originR, originC int) (freeRows, freeCols []int) {
+	colHeaderDepth, rowHeaderDepth := bm.headerDepths()
+	colAnchors := bm.colAnchorNames()
+	rowAnchors := bm.rowAnchorNames()
+
+	if len(matrix) == 0 {
+		return
+	}
+	width := 0
+	if originR < len(matrix) {
+		width = len(matrix[originR])
+	}
+
+	// --- Free column detection ---
+	// Scan cols from originC+rowHeaderDepth rightward.
+	// At the first header row (originR), cells should be col anchors or empty (merged span).
+	lastColAnchor := ""
+	lastColAnchorPhanTo := (*PhanTo)(nil)
+
+	for ac := originC + rowHeaderDepth; ac < width; ac++ {
+		cell0 := ""
+		if originR < len(matrix) && ac < len(matrix[originR]) {
+			cell0 = matrix[originR][ac]
+		}
+
+		isFree := false
+		if cell0 == "" {
+			// Merged cell: inherit from lastColAnchor. Free only if no anchor is active.
+			if lastColAnchor == "" {
+				isFree = true
+			}
+		} else if colAnchors[cell0] {
+			lastColAnchor = cell0
+			// Resolve the PhanTo for StrictValues checking.
+			lastColAnchorPhanTo = nil
+			for _, pt := range bm.PhanToChungs {
+				if pt.Name == cell0 {
+					lastColAnchorPhanTo = pt
+					break
+				}
+			}
+		} else if bm.ColCollapse {
+			// In collapse mode, value cells appear in the same header row as anchor names.
+			// Only reject via StrictValues; otherwise treat as structural (potential new value).
+			if lastColAnchorPhanTo != nil && lastColAnchorPhanTo.StrictValues {
+				if !slices.Contains(lastColAnchorPhanTo.Values, cell0) {
+					isFree = true
+				}
+			}
+			// If no active PhanTo context, could be a ChiTieu-specific PhanTo name: treat as structural.
+		} else {
+			// Non-collapse mode: depth-0 should only have anchor names or empty.
+			lastColAnchor = ""
+			lastColAnchorPhanTo = nil
+			isFree = true
+		}
+
+		// In non-collapse mode, also check StrictValues at depth-1 (value row).
+		if !isFree && !bm.ColCollapse && lastColAnchorPhanTo != nil && lastColAnchorPhanTo.StrictValues && colHeaderDepth >= 2 {
+			valR := originR + 1
+			valCell := ""
+			if valR < len(matrix) && ac < len(matrix[valR]) {
+				valCell = matrix[valR][ac]
+			}
+			if valCell != "" && !slices.Contains(lastColAnchorPhanTo.Values, valCell) {
+				isFree = true
+			}
+		}
+
+		if isFree {
+			freeCols = append(freeCols, ac)
+		}
+	}
+
+	// --- Free row detection ---
+	// Scan rows from originR+colHeaderDepth downward.
+	// At the first header column (originC), cells should be row anchors or empty.
+	lastRowAnchor := ""
+	lastRowAnchorPhanTo := (*PhanTo)(nil)
+
+	for ar := originR + colHeaderDepth; ar < len(matrix); ar++ {
+		cell0 := ""
+		if originC < len(matrix[ar]) {
+			cell0 = matrix[ar][originC]
+		}
+
+		isFree := false
+		if cell0 == "" {
+			if lastRowAnchor == "" {
+				isFree = true
+			}
+		} else if rowAnchors[cell0] {
+			lastRowAnchor = cell0
+			lastRowAnchorPhanTo = nil
+			for _, pt := range bm.PhanToChungs {
+				if pt.Name == cell0 {
+					lastRowAnchorPhanTo = pt
+					break
+				}
+			}
+		} else if bm.RowRollapse {
+			// In collapse mode, value cells appear in the same header column as anchor names.
+			if lastRowAnchorPhanTo != nil && lastRowAnchorPhanTo.StrictValues {
+				if !slices.Contains(lastRowAnchorPhanTo.Values, cell0) {
+					isFree = true
+				}
+			}
+		} else {
+			lastRowAnchor = ""
+			lastRowAnchorPhanTo = nil
+			isFree = true
+		}
+
+		// In non-collapse mode, also check StrictValues at depth-1 (value col).
+		if !isFree && !bm.RowRollapse && lastRowAnchorPhanTo != nil && lastRowAnchorPhanTo.StrictValues && rowHeaderDepth >= 2 {
+			valC := originC + 1
+			valCell := ""
+			if valC < len(matrix[ar]) {
+				valCell = matrix[ar][valC]
+			}
+			if valCell != "" && !slices.Contains(lastRowAnchorPhanTo.Values, valCell) {
+				isFree = true
+			}
+		}
+
+		if isFree {
+			freeRows = append(freeRows, ar)
+		}
+	}
+
+	return
+}
+
+// extractSubMatrix extracts the sub-matrix starting at (originR, originC),
+// skipping the absolute row and column indices listed in freeRows and freeCols.
+func extractSubMatrix(matrix [][]string, originR, originC int, freeRows, freeCols []int) ([][]string, error) {
+	if originR < 0 || originC < 0 {
+		return nil, errors.New("origin âm")
+	}
+	freeRowSet := makeIntSet(freeRows)
+	freeColSet := makeIntSet(freeCols)
+
+	result := [][]string{}
+	for r := originR; r < len(matrix); r++ {
+		if freeRowSet[r] {
+			continue
+		}
+		row := []string{}
+		for c := originC; c < len(matrix[r]); c++ {
+			if freeColSet[c] {
+				continue
+			}
+			row = append(row, matrix[r][c])
+		}
+		result = append(result, row)
+	}
+	if len(result) == 0 {
+		return nil, errors.New("sub-matrix rỗng sau khi loại bỏ hàng/cột tự do")
+	}
+	return result, nil
+}
+
+// importFromMatrixAuto imports data from an arbitrary Excel-pasted matrix that may be shifted
+// (extra rows/cols of free content above/left) and may contain inserted free rows/cols (totals, labels).
+// Precondition: setupFull() must have been called first.
+func (bm *BieuMau) importFromMatrixAuto(matrix [][]string) error {
+	originR, originC, err := bm.findTableOrigin(matrix)
+	if err != nil {
+		return err
+	}
+	freeRows, freeCols := bm.findFreeRowsCols(matrix, originR, originC)
+	sub, err := extractSubMatrix(matrix, originR, originC, freeRows, freeCols)
+	if err != nil {
+		return err
+	}
+	bm.importFromMatrix(sub)
+	return nil
 }
