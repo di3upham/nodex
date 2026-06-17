@@ -55,6 +55,9 @@ type Node struct {
 	Type string // chitieu, phanto, phanto_value, or "" for root
 }
 
+// Constrants
+// 1. Tên ChiTieu/PhanTo/PhanToChung phải duy nhất và không trùng với giá trị PhanTo nào
+// 2. Collapse mode: free col/row chỉ phát hiện được khi StrictValues=true
 type BieuMau struct {
 	ChiTieus     []*ChiTieu
 	BangChiTieus []*BangChiTieu
